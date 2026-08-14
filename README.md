@@ -23,6 +23,15 @@ straight to blue, and why every surface converges on the same grey-blue within a
 couple of degrees of the terminator: down there the atmosphere is most of what
 you can see.
 
+The land is not one colour. A procedural climate sits on top of the land ramp:
+the rainforest belt, the subtropical deserts, the boreal forest and the tundra,
+bent and broken by noise so no zone follows a ruled parallel, and a seasonal
+snow cap that follows the solar declination down into the mid latitudes of the
+winter hemisphere and back toward the pole in summer. Greenland and Antarctica
+keep their permanent ice. It is climate as a function of latitude and season,
+not a map of weather, but it is why Siberia whitens in January and why the
+Sahara does not look like the Congo.
+
 Over that continuous gradient sit four hairlines, at solar elevations of
 -0.833, -6, -12 and -18 degrees: sunrise and sunset, then the ends of civil,
 nautical and astronomical twilight. Most maps of this kind pick one or the
@@ -57,12 +66,17 @@ day and polar night open and close. Space bar plays and pauses.
 **Find a place.** Move the pointer over the map for a live readout, or click to
 pin one. Scroll to zoom, drag to pan, `0` to reset.
 
-**On a phone.** The whole world at once on a tall narrow screen is a thin strip
-with more surround than map, so a phone opens zoomed in on wherever your browser
-thinks you are, worked out from your time zone and without asking for location
-permission. Drag to pan, pinch to zoom, double tap to zoom in, single tap to pin
-a place. There is no hover on a touch screen, so the readout follows the pin
-rather than your finger, and every control is sized for one.
+**On a phone.** The map is the whole screen. The rail floats over its top edge
+and the console folds into a bottom sheet that peeks the clock and the day
+scrubber; pull it up, or tap it, for the rest of the readout, the year scrubber
+and the animation controls. The page itself never scrolls or zooms, only the
+map does: a phone opens zoomed in on wherever your browser thinks you are,
+worked out from your time zone and without asking for location permission. Drag
+to pan, pinch to zoom, double tap to zoom in, single tap to pin a place, and
+the round button above the sheet brings the view home. There is no hover on a
+touch screen, so the readout follows the pin rather than your finger, and every
+control is sized for one. Added to a home screen it runs standalone, edge to
+edge.
 
 **Time zones.** Turn on the time zone layer to see the real, irregular zone
 boundaries with each zone's own clock. Turn on `Same clock time` as well and

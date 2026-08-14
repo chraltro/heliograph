@@ -193,6 +193,7 @@ out vec4 fragColor;
 
 void main() {
   float elevation = solarElevation(vLonLat);
+  float lat = vLonLat.y;
 
   // Three octaves of variation. Enough to suggest relief without pretending to
   // be a satellite image.
@@ -200,11 +201,54 @@ void main() {
               + periodicNoise(vLonLat * 2.0, 720.0) * 0.30
               + periodicNoise(vLonLat * 7.0, 2520.0) * 0.14;
 
-  // Permanent ice: the high Arctic, and Antarctica. Ice gets its own ramp
-  // because high albedo surfaces keep catching the reddened beam right up to
-  // the terminator, which is why snow goes pink at sunset and water does not.
-  float ice = max(smoothstep(69.0, 81.0, vLonLat.y), smoothstep(60.0, 71.0, -vLonLat.y)) * uIceAmount;
-  vec3 base = mix(surfaceColour(uRampA, elevation), surfaceColour(uRampB, elevation), ice);
+  // Two slow fields stand in for climate. One bends the band boundaries so no
+  // zone follows a ruled parallel; the other stands in for how continental a
+  // place is, and breaks deserts and snowfields into provinces. The x scales
+  // must keep 360 times the scale an integer or the noise seams at the
+  // antimeridian.
+  float wobble = periodicNoise(vLonLat * vec2(0.05, 0.09), 18.0) - 0.5;
+  float province = periodicNoise(vLonLat * vec2(0.125, 0.15) + vec2(31.7, 11.3), 45.0);
+  float shifted = abs(lat + wobble * 14.0);
+
+  // The latitudinal facts of the planet, as weights: rainforest about the
+  // equator, the subtropical desert belt, the boreal forest, tundra past it.
+  float tropics = 1.0 - smoothstep(8.0, 17.0, shifted);
+  float desert = smoothstep(11.0, 19.0, shifted) * (1.0 - smoothstep(27.0, 38.0, shifted));
+  desert *= 0.35 + 0.65 * province;
+  float boreal = smoothstep(46.0, 55.0, shifted) * (1.0 - smoothstep(60.0, 68.0, shifted));
+  float tundra = smoothstep(60.0, 68.0, shifted);
+
+  // Albedo tints over the spectral land ramp, in linear light. Dry plains and
+  // forest trade places on the province field inside every band.
+  float verdure = periodicNoise(vLonLat * vec2(0.25, 0.3) + 7.0, 90.0);
+  vec3 tint = mix(vec3(1.06, 0.99, 0.86), vec3(0.88, 1.03, 0.80), verdure);
+  tint = mix(tint, vec3(0.62, 0.84, 0.44), tropics * (0.55 + 0.45 * province));
+  tint = mix(tint, vec3(1.38, 1.07, 0.70), desert);
+  tint = mix(tint, vec3(0.68, 0.84, 0.58), boreal * (0.5 + 0.5 * verdure));
+  tint = mix(tint, vec3(1.06, 1.02, 0.94), tundra);
+
+  // Albedo is a daylight fact. Within a few degrees of the terminator the
+  // atmosphere is most of what you can see, so the tint lets go there and
+  // every surface converges on the ramp's own twilight colour.
+  float lit = smoothstep(-4.0, 8.0, elevation);
+  vec3 albedo = mix(vec3(1.0), tint, lit * 0.9);
+
+  // Ice and snow get their own ramp because high albedo surfaces keep catching
+  // the reddened beam right up to the terminator, which is why snow goes pink
+  // at sunset and water does not. The permanent caps are the high Arctic and
+  // Antarctica; the seasonal cap follows the Sun, its edge ragged with noise,
+  // reaching mid latitudes in the winter hemisphere and letting go in summer.
+  float ragged = (periodicNoise(vLonLat * vec2(0.5, 0.7), 180.0) - 0.5) * 5.0 + wobble * 6.0;
+  float snowLineN = 64.0 + uSun.x * 0.85;
+  float snowLineS = 64.0 - uSun.x * 0.85;
+  float seasonal = max(
+    smoothstep(snowLineN - 3.0, snowLineN + 9.0, lat + ragged),
+    smoothstep(snowLineS - 3.0, snowLineS + 9.0, -lat + ragged)
+  ) * (0.55 + 0.45 * province);
+  float permanent = max(smoothstep(69.0, 81.0, lat), smoothstep(60.0, 71.0, -lat));
+  float ice = max(permanent, seasonal) * uIceAmount;
+
+  vec3 base = mix(surfaceColour(uRampA, elevation) * albedo, surfaceColour(uRampB, elevation), ice);
 
   fragColor = vec4(withDetail(base, grain, elevation), 1.0);
 }
