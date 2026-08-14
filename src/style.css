@@ -80,6 +80,43 @@ body {
   font-size: 12px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  /* An instrument, not a document: nothing on it selects, balloons or zooms. */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body {
+  /* Pin the page so iOS has nothing to rubber-band. */
+  position: fixed;
+  inset: 0;
+}
+
+input,
+select,
+textarea {
+  -webkit-user-select: auto;
+  user-select: auto;
+}
+
+/*
+ * Interactive things opt out of the browser's double tap zoom; the scrubbers
+ * go further and claim the whole gesture, or a touch drag would be stolen by
+ * the scroll detector half way along the track.
+ */
+button,
+select,
+input,
+label,
+.rail,
+.console,
+.panel {
+  touch-action: manipulation;
+}
+
+.scrubber-surface {
+  touch-action: none;
 }
 
 #app {
@@ -390,15 +427,33 @@ select:hover {
   gap: var(--space-3);
 }
 
+/* The DOM keeps the clock first for the phone sheet; the grid puts the place
+   readout back on the left for wide screens. */
 .console-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-areas: 'place clock transport';
   align-items: end;
   gap: var(--space-5);
 }
 
 .place {
+  grid-area: place;
   min-width: 0;
+}
+
+.clock {
+  grid-area: clock;
+}
+
+.transport {
+  grid-area: transport;
+}
+
+/* The sheet grip and the recenter button exist only for the phone shell. */
+.sheet-grip,
+.fab {
+  display: none;
 }
 
 .place p {
@@ -691,13 +746,13 @@ select:hover {
 
   .console-grid {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'clock' 'transport' 'place';
     gap: var(--space-3);
     align-items: start;
   }
 
   .clock {
     text-align: left;
-    order: -1;
   }
 
   .transport {
@@ -853,5 +908,324 @@ select:hover {
   select {
     padding-top: 8px;
     padding-bottom: 8px;
+  }
+}
+
+/* ---------------------------------------------------------------- phone shell
+ *
+ * Below this line the shell stops being three stacked bands and becomes what a
+ * native map application is: the map filling the whole screen, the rail
+ * floating over its top edge, and the console folded into a bottom sheet that
+ * peeks the clock and the day scrubber and pulls up for everything else.
+ * The media query is mirrored exactly in app.ts as SHEET_MEDIA.
+ */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  #app {
+    display: block;
+  }
+
+  .stage {
+    position: fixed;
+    inset: 0;
+  }
+
+  /* The rail floats on a scrim that fades into the map, not on a band. */
+  .rail {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 6;
+    height: auto;
+    gap: var(--space-2);
+    padding: calc(var(--space-2) + env(safe-area-inset-top)) var(--space-3) var(--space-4);
+    padding-left: max(var(--space-3), env(safe-area-inset-left));
+    padding-right: max(var(--space-3), env(safe-area-inset-right));
+    background: linear-gradient(
+      180deg,
+      rgba(6, 11, 16, 0.92) 0%,
+      rgba(6, 11, 16, 0.55) 58%,
+      rgba(6, 11, 16, 0) 100%
+    );
+    pointer-events: none;
+  }
+
+  .rail > * {
+    pointer-events: auto;
+  }
+
+  .rail-readout {
+    display: none;
+  }
+
+  .rail-controls .micro {
+    display: none;
+  }
+
+  .rail select,
+  .rail .field,
+  .rail .button {
+    background-color: rgba(16, 21, 27, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .rail-controls {
+    flex: 1 1 auto;
+  }
+
+  /* The zone picker keeps enough width to read, and never less. */
+  .rail select {
+    min-width: 76px;
+    flex-shrink: 1;
+    overflow: hidden;
+  }
+
+  /* Tapping the field itself opens the picker on a phone, so the little
+     indicator icons only spend width the rail does not have. */
+  .field::-webkit-calendar-picker-indicator {
+    display: none;
+  }
+
+  .rail .field {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  /* Layers folds down to an icon; the word costs too much of a phone's rail. */
+  [data-layers-toggle] {
+    font-size: 0;
+    letter-spacing: 0;
+    width: 40px;
+    padding: 0;
+    min-height: 36px;
+    flex: 0 0 auto;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M8 1.2 15 5 8 8.8 1 5z' fill='%23b4b8bc'/%3E%3Cpath d='M13.1 7.6 15 8.6l-7 3.8-7-3.8 1.9-1L8 10.4z' fill='%23b4b8bc' opacity='0.7'/%3E%3Cpath d='M13.1 11.2 15 12.2 8 16l-7-3.8 1.9-1L8 14z' fill='%23b4b8bc' opacity='0.45'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 15px;
+  }
+
+  .layers {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 56px);
+    left: max(var(--space-3), env(safe-area-inset-left));
+    right: max(var(--space-3), env(safe-area-inset-right));
+    width: auto;
+    max-height: calc(100vh - 200px);
+    max-height: calc(100dvh - 200px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    z-index: 7;
+  }
+
+  /* -------------------------------------------------------------- the sheet */
+
+  .console {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'grip grip'
+      'clock transport'
+      'day day'
+      'modes rates'
+      'year year'
+      'months months'
+      'place place';
+    align-items: center;
+    column-gap: var(--space-3);
+    row-gap: 0;
+    padding: 0 var(--space-3) calc(var(--space-2) + env(safe-area-inset-bottom));
+    padding-left: max(var(--space-3), env(safe-area-inset-left));
+    padding-right: max(var(--space-3), env(safe-area-inset-right));
+    border-radius: 18px 18px 0 0;
+    background: rgba(8, 13, 18, 0.82);
+    backdrop-filter: blur(24px) saturate(0.8);
+    -webkit-backdrop-filter: blur(24px) saturate(0.8);
+    max-height: calc(100vh - 84px);
+    max-height: calc(100dvh - 84px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    transform: translate3d(0, var(--sheet-shift, 0px), 0);
+  }
+
+  .console.sheet-ready {
+    transition: transform var(--dur-move) var(--ease-std);
+  }
+
+  .console.is-dragging {
+    transition: none;
+  }
+
+  /* The grid reaches through these wrappers and lays out their children. */
+  .console-grid,
+  .scrubbers,
+  .transport {
+    display: contents;
+  }
+
+  .sheet-grip {
+    display: block;
+    grid-area: grip;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    width: 100%;
+    margin: 0;
+    padding: 10px 0 8px;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .sheet-grip-bar {
+    display: block;
+    width: 40px;
+    height: 4px;
+    margin: 0 auto;
+    border-radius: 2px;
+    background: var(--ink-300);
+    transition: background var(--dur-tap) var(--ease-out);
+  }
+
+  .sheet-grip:active .sheet-grip-bar {
+    background: var(--ink-500);
+  }
+
+  /* The clock doubles as a drag handle for the sheet, so it owns its touches. */
+  .clock {
+    grid-area: clock;
+    text-align: left;
+    padding: 0;
+    min-width: 0;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .clock-date {
+    font-size: 9px;
+    letter-spacing: 0.16em;
+  }
+
+  .clock-time {
+    font-size: 34px;
+    line-height: 1.05;
+  }
+
+  .clock-zone {
+    font-size: 9px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .transport-row {
+    grid-area: transport;
+    justify-self: end;
+  }
+
+  .scrubber-day {
+    grid-area: day;
+    margin-top: var(--space-1);
+  }
+
+  [data-modes] {
+    grid-area: modes;
+    justify-self: start;
+    margin-top: var(--space-3);
+  }
+
+  [data-rates] {
+    grid-area: rates;
+    justify-self: end;
+    margin-top: var(--space-3);
+    display: flex;
+  }
+
+  .scrubber-year {
+    grid-area: year;
+    margin-top: var(--space-3);
+  }
+
+  .month-scale {
+    grid-area: months;
+    align-self: start;
+  }
+
+  .place {
+    grid-area: place;
+    margin-top: var(--space-3);
+  }
+
+  /* The sheet has room for the whole readout, unlike the 560px band above. */
+  .facts {
+    gap: var(--space-1) var(--space-4);
+  }
+
+  .facts div:nth-child(n + 4) {
+    display: flex;
+  }
+
+  /* ------------------------------------------------------------- recenter */
+
+  .fab {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    right: max(var(--space-3), env(safe-area-inset-right));
+    bottom: calc(var(--sheet-peek, 150px) + var(--space-3));
+    z-index: 4;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(16, 21, 27, 0.78);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: var(--ink-700);
+    fill: currentColor;
+    cursor: pointer;
+    transition: opacity var(--dur-tap) var(--ease-out);
+  }
+
+  .fab svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .fab:active {
+    color: var(--sun-500);
+  }
+
+  body.sheet-open .fab {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* The narrowest phones give the whole rail to the controls. */
+@media (max-width: 350px) {
+  .mark {
+    display: none;
+  }
+}
+
+/* A phone on its side: the sheet becomes a card on the left so the map keeps
+   the wide dimension to itself. */
+@media (pointer: coarse) and (max-height: 520px) {
+  .console {
+    left: max(var(--space-3), env(safe-area-inset-left));
+    right: auto;
+    width: min(400px, 56vw);
+    max-height: calc(100vh - 64px);
+    max-height: calc(100dvh - 64px);
+  }
+
+  .fab {
+    bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
   }
 }

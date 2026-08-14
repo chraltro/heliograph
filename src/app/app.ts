@@ -91,6 +91,14 @@ const TEMPLATE = /* html */ `
   <canvas class="map" data-map></canvas>
   <canvas class="overlay" data-overlay></canvas>
 
+  <button type="button" class="fab" data-recenter aria-label="Reset the view to your place">
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <circle cx="10" cy="10" r="1.6"/>
+      <path d="M10 1v3.2M10 15.8V19M1 10h3.2M15.8 10H19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+  </button>
+
   <div class="panel layers" id="layers" data-layers hidden>
     <p class="micro panel-title">Layers</p>
     <div data-layer-list></div>
@@ -99,21 +107,12 @@ const TEMPLATE = /* html */ `
   </div>
 </main>
 
-<footer class="console">
-  <div class="console-grid">
-    <section class="place" aria-live="polite">
-      <p class="micro" data-place-label>Under the pointer</p>
-      <p class="place-name" data-place-name>—</p>
-      <p class="place-coords numeric" data-place-coords>—</p>
-      <dl class="facts">
-        <div><dt class="micro">Local</dt><dd class="numeric" data-place-clock>—</dd></div>
-        <div><dt class="micro">Sun</dt><dd class="numeric" data-place-sun>—</dd></div>
-        <div><dt class="micro">Rise</dt><dd class="numeric" data-place-rise>—</dd></div>
-        <div><dt class="micro">Set</dt><dd class="numeric" data-place-set>—</dd></div>
-        <div><dt class="micro">Daylight</dt><dd class="numeric" data-place-daylight>—</dd></div>
-      </dl>
-    </section>
+<footer class="console" data-console>
+  <button type="button" class="sheet-grip" data-sheet-toggle aria-expanded="false" aria-label="Show more detail">
+    <span class="sheet-grip-bar" aria-hidden="true"></span>
+  </button>
 
+  <div class="console-grid">
     <section class="clock">
       <p class="clock-date numeric" data-date>—</p>
       <p class="clock-time numeric" data-time>—</p>
@@ -135,11 +134,31 @@ const TEMPLATE = /* html */ `
       <div class="segmented" role="group" aria-label="What to animate" data-modes></div>
       <div class="segmented segmented-quiet" role="group" aria-label="Speed" data-rates></div>
     </section>
+
+    <section class="place" aria-live="polite">
+      <p class="micro" data-place-label>Under the pointer</p>
+      <p class="place-name" data-place-name>—</p>
+      <p class="place-coords numeric" data-place-coords>—</p>
+      <dl class="facts">
+        <div><dt class="micro">Local</dt><dd class="numeric" data-place-clock>—</dd></div>
+        <div><dt class="micro">Sun</dt><dd class="numeric" data-place-sun>—</dd></div>
+        <div><dt class="micro">Rise</dt><dd class="numeric" data-place-rise>—</dd></div>
+        <div><dt class="micro">Set</dt><dd class="numeric" data-place-set>—</dd></div>
+        <div><dt class="micro">Daylight</dt><dd class="numeric" data-place-daylight>—</dd></div>
+      </dl>
+    </section>
   </div>
 
   <div class="scrubbers" data-scrubbers></div>
 </footer>
 `
+
+/**
+ * Where the shell switches from the desktop arrangement, three stacked bands,
+ * to the phone one: a full screen map with the rail floating on top and the
+ * console folded into a bottom sheet. Mirrored exactly in style.css.
+ */
+const SHEET_MEDIA = '(max-width: 720px), (pointer: coarse) and (max-height: 520px)'
 
 const LAYER_FIELDS = [
   { key: 'cities', label: 'City lights', group: 'map' },
@@ -237,8 +256,10 @@ export class Heliograph {
     this.buildLegend()
     this.buildTransport()
     this.buildScrubbers()
+    this.buildSheet()
     this.bindPointer()
     this.bindKeyboard()
+    this.lockPageGestures()
 
     const observer = new ResizeObserver(() => this.resize())
     observer.observe(this.stage)
@@ -249,6 +270,7 @@ export class Heliograph {
     await document.fonts.ready.catch(() => undefined)
     this.dayScrubber.resize(this.dpr)
     this.yearScrubber.resize(this.dpr)
+    this.syncSheet()
 
     this.startedAt = performance.now()
     this.lastFrame = this.startedAt
@@ -656,6 +678,9 @@ export class Heliograph {
       ticks: () => this.yearTicks(),
     })
 
+    this.dayScrubber.element.classList.add('scrubber-day')
+    this.yearScrubber.element.classList.add('scrubber-year')
+
     const months = document.createElement('div')
     months.className = 'month-scale'
     for (const name of ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']) {
@@ -772,6 +797,138 @@ export class Heliograph {
   private repaintTracks(): void {
     this.dayScrubber.repaint()
     this.yearScrubber.repaint()
+  }
+
+  // ------------------------------------------------------------------ sheet
+
+  /**
+   * On a phone the console is a bottom sheet over the map, the way every native
+   * map application arranges itself. Collapsed it shows the clock, the play
+   * control and the day scrubber; pulled up it reveals the rest. The sheet is
+   * moved with a transform so the map behind it never has to relayout.
+   */
+  private buildSheet(): void {
+    const sheet = this.q<HTMLElement>('[data-console]')
+    const grip = this.q<HTMLButtonElement>('[data-sheet-toggle]')
+    this.sheetEl = sheet
+
+    this.sheetMedia = window.matchMedia(SHEET_MEDIA)
+    this.sheetMedia.addEventListener('change', () => this.syncSheet())
+    new ResizeObserver(() => this.syncSheet()).observe(sheet)
+
+    // Drag follows the finger; a short movement counts as a tap and toggles.
+    // The clock face works as a handle too, the way a native sheet's whole
+    // header does, not just the grip bar.
+    let startY = 0
+    let startShift = 0
+    let moved = 0
+    let lastY = 0
+    let lastAt = 0
+    let velocity = 0
+    let dragging = false
+
+    const attachDrag = (handle: HTMLElement) => {
+      handle.addEventListener('pointerdown', (event) => {
+        if (!this.sheetMedia.matches) return
+        dragging = true
+        moved = 0
+        startY = lastY = event.clientY
+        lastAt = performance.now()
+        velocity = 0
+        startShift = this.sheetOpen ? 0 : this.sheetClosedShift
+        handle.setPointerCapture(event.pointerId)
+        sheet.classList.add('is-dragging')
+      })
+      handle.addEventListener('pointermove', (event) => {
+        if (!dragging) return
+        const now = performance.now()
+        const dy = event.clientY - lastY
+        if (now > lastAt) velocity = dy / (now - lastAt)
+        lastY = event.clientY
+        lastAt = now
+        moved = Math.max(moved, Math.abs(event.clientY - startY))
+        const shift = Math.min(this.sheetClosedShift, Math.max(0, startShift + event.clientY - startY))
+        sheet.style.setProperty('--sheet-shift', `${shift}px`)
+      })
+      const settle = (event: PointerEvent) => {
+        if (!dragging) return
+        dragging = false
+        sheet.classList.remove('is-dragging')
+        if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
+        if (moved < 6) {
+          this.setSheet(!this.sheetOpen)
+          return
+        }
+        const shift = startShift + lastY - startY
+        // A flick goes the way it was thrown; a slow drag settles to the nearer stop.
+        const open = Math.abs(velocity) > 0.4 ? velocity < 0 : shift < this.sheetClosedShift / 2
+        this.setSheet(open)
+      }
+      handle.addEventListener('pointerup', settle)
+      handle.addEventListener('pointercancel', settle)
+    }
+    attachDrag(grip)
+    attachDrag(this.q('.clock'))
+
+    // Touching the map puts the map first: the sheet folds back down.
+    this.overlayCanvas.addEventListener('pointerdown', () => {
+      if (this.sheetOpen && this.sheetMedia.matches) this.setSheet(false)
+    })
+
+    this.q<HTMLButtonElement>('[data-recenter]').addEventListener('click', () => this.recenter())
+  }
+
+  private setSheet(open: boolean): void {
+    this.sheetOpen = open
+    this.q('[data-sheet-toggle]').setAttribute('aria-expanded', String(open))
+    this.q('[data-sheet-toggle]').setAttribute('aria-label', open ? 'Show less detail' : 'Show more detail')
+    document.body.classList.toggle('sheet-open', open)
+    this.syncSheet()
+  }
+
+  /**
+   * Measure how far down the sheet rests when closed: everything below the day
+   * scrubber slides off the bottom of the screen. Distances inside the sheet do
+   * not change under a translate, so measuring while shifted is safe.
+   */
+  private syncSheet(): void {
+    const sheet = this.sheetEl
+    if (!sheet) return
+    if (!this.sheetMedia.matches) {
+      sheet.style.removeProperty('--sheet-shift')
+      document.documentElement.style.removeProperty('--sheet-peek')
+      return
+    }
+    const top = sheet.getBoundingClientRect().top
+    const dayBottom = this.dayScrubber.element.getBoundingClientRect().bottom
+    const padBottom = Number.parseFloat(getComputedStyle(sheet).paddingBottom) || 0
+    this.sheetClosedShift = Math.max(0, sheet.offsetHeight - (dayBottom - top) - padBottom)
+    sheet.style.setProperty('--sheet-shift', `${this.sheetOpen ? 0 : this.sheetClosedShift}px`)
+    const peek = sheet.offsetHeight - this.sheetClosedShift
+    document.documentElement.style.setProperty('--sheet-peek', `${Math.round(peek)}px`)
+    // The sheet arrives already folded; only movements after that first
+    // placement are animated, so opening the page never plays a slide.
+    if (!sheet.classList.contains('sheet-ready')) {
+      requestAnimationFrame(() => sheet.classList.add('sheet-ready'))
+    }
+  }
+
+  /** Back to the opening view: the pinned place, framed the way a phone opens. */
+  private recenter(): void {
+    const site = this.referenceSite()
+    this.view = clampView(this.size, { centerLon: site.lon, centerLat: site.lat, zoom: this.fillZoom() })
+    this.markDirty()
+  }
+
+  /**
+   * The page is an instrument, not a document: the browser's own pinch zoom and
+   * double tap zoom would fight the map's. The viewport meta asks politely;
+   * Safari on iOS ignores it and needs the gesture events cancelled too.
+   */
+  private lockPageGestures(): void {
+    for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+      document.addEventListener(type, (event) => event.preventDefault())
+    }
   }
 
   // ------------------------------------------------------------------ input
@@ -1000,6 +1157,7 @@ export class Heliograph {
       this.dayScrubber.resize(this.dpr)
       this.yearScrubber.resize(this.dpr)
     }
+    this.syncSheet()
     this.markDirty()
   }
 
@@ -1014,10 +1172,21 @@ export class Heliograph {
     const plateHeight = worldHeight(this.size, this.view)
     if (plateHeight >= this.size.height * 0.62) return
     const site = this.referenceSite()
-    const zoom = Math.min(3, (this.size.height * 0.92) / (fitWidth(this.size) / 2))
-    this.view = clampView(this.size, { centerLon: site.lon, centerLat: site.lat, zoom })
+    this.view = clampView(this.size, { centerLon: site.lon, centerLat: site.lat, zoom: this.fillZoom() })
   }
 
+  /**
+   * The zoom at which the plate covers the viewport top to bottom, so a tall
+   * screen opens onto a full bleed map rather than a letterboxed strip.
+   */
+  private fillZoom(): number {
+    return Math.max(1, Math.min(6, (this.size.height * 1.002) / (fitWidth(this.size) / 2)))
+  }
+
+  private sheetEl: HTMLElement | null = null
+  private sheetMedia!: MediaQueryList
+  private sheetOpen = false
+  private sheetClosedShift = 0
   private yearAccumulator = 0
   private urlTimer = 0
   private urlSetTheView = false
