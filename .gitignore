@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-single/
+.cache/
+test-results/
+playwright-report/
+blob-report/
+.vite/
+*.local
+.DS_Store
+Thumbs.db
+
+# Raw Natural Earth downloads. Large, reproducible with `npm run data`.
+scripts/.cache/
+
+.deploy/
+shots/

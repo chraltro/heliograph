@@ -1,0 +1,36 @@
+{
+  "name": "heliograph",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A world map of sunlight: where the sun falls on Earth at any date and time.",
+  "scripts": {
+    "data": "node scripts/build-data.mjs",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test",
+    "e2e:update": "playwright test --update-snapshots",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run e2e",
+    "fonts": "node scripts/build-fonts.mjs",
+    "shots": "node scripts/sheet.mjs",
+    "deploy": "npm run build && node scripts/deploy.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/earcut": "^2.1.4",
+    "@types/node": "^22.10.0",
+    "earcut": "^3.0.0",
+    "mapshaper": "^0.6.102",
+    "subset-font": "^2.5.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.1.0",
+    "vitest": "^2.1.8"
+  },
+  "homepage": "https://chraltro.github.io/heliograph/",
+  "license": "MIT"
+}
