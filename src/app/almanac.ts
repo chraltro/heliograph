@@ -19,7 +19,7 @@ import {
   solarState,
   type DayEvents,
 } from '../solar/solar.ts'
-import { describeEclipse, nextEclipses, type Eclipse } from '../solar/eclipse.ts'
+import { describeEclipse, nextEclipses, worthSeeing, type Eclipse } from '../solar/eclipse.ts'
 import {
   formatAzimuth,
   formatDate,
@@ -200,7 +200,7 @@ export class Almanac {
     const from = time
     const to = time + ECLIPSE_HORIZON_YEARS * 365.25 * MS_PER_DAY
     if (!this.eclipses || time < this.eclipseSpan.from || time > this.eclipseSpan.to) {
-      this.eclipses = nextEclipses(from, ECLIPSE_COUNT, ECLIPSE_HORIZON_YEARS)
+      this.eclipses = nextEclipses(from, ECLIPSE_COUNT, ECLIPSE_HORIZON_YEARS, worthSeeing)
       // Good until the clock passes the second of them, at which point the list
       // is stale by one and worth rebuilding.
       this.eclipseSpan = { from, to: this.eclipses[1]?.time ?? to }

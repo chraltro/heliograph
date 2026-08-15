@@ -453,13 +453,20 @@ test('the almanac lists eclipses and jumps to one', async () => {
   await apply('?t=2026-08-14T12:00:00Z&play=off&tz=UTC&pin=59.92,10.75&layers=places')
   await page.locator('[data-almanac-toggle]').click()
   await expect(page.locator('.almanac-eclipse').first()).toBeVisible()
-  const first = await page.locator('.almanac-eclipse button').first().textContent()
-  // The next eclipse after 14 August 2026 is the partial lunar of the 28th.
-  expect(first).toContain('28 AUG 2026')
-  expect(first).toContain('lunar')
+  const listed = await page.locator('.almanac-eclipse button').allTextContents()
+  // Only the ones worth looking up for. A penumbral lunar eclipse at magnitude
+  // zero is invisible to the naked eye, and a shallow partial is barely better;
+  // listing them buries the total eclipses that are the reason to look at all.
+  expect(listed.join(' ')).not.toContain('Penumbral')
+  expect(listed.join(' ')).not.toContain('Partial')
+  expect(listed.join(' ')).toContain('Total solar')
+
+  // The first after 14 August 2026 is the annular of 6 February 2027.
+  expect(listed[0]).toContain('06 FEB 2027')
+  expect(listed[0]).toContain('Annular solar')
 
   await page.locator('.almanac-eclipse button').first().click()
-  await expect(page.locator('[data-date]')).toHaveText('FRI 28 AUG 2026')
+  await expect(page.locator('[data-date]')).toHaveText('SAT 06 FEB 2027')
   await page.locator('[data-almanac-toggle]').click()
 })
 

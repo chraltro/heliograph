@@ -313,14 +313,38 @@ export function lunarEclipseNear(time: number): LunarEclipse {
  * years at a time and stops as soon as it has enough, which is a fifth of a
  * second, and only keeps going for the rare stretch that holds none.
  */
-export function nextEclipses(from: number, count: number, horizonYears = 100): Eclipse[] {
+export function nextEclipses(
+  from: number,
+  count: number,
+  horizonYears = 100,
+  keep: (eclipse: Eclipse) => boolean = () => true,
+): Eclipse[] {
   const chunk = 2 * 365.25 * MS_PER_DAY
   const limit = from + horizonYears * 365.25 * MS_PER_DAY
   const found: Eclipse[] = []
   for (let start = from; start < limit && found.length < count; start += chunk) {
-    found.push(...findEclipses(start, Math.min(start + chunk, limit)))
+    found.push(...findEclipses(start, Math.min(start + chunk, limit)).filter(keep))
   }
   return found.slice(0, count)
+}
+
+/**
+ * Is this one worth being told about?
+ *
+ * Most eclipses are not. A penumbral lunar eclipse is the Moon passing through
+ * the soft edge of the Earth's shadow, and at a magnitude near zero there is
+ * nothing whatever to see: no bite out of the disc, often not even a shading
+ * anyone would notice without a photograph to compare against. A shallow
+ * partial is barely better. They are real events and the catalogue keeps them,
+ * but a list of eight that spends five of its rows on them has buried the
+ * total eclipse that was the reason to look.
+ *
+ * So the almanac shows the ones you would travel for, or at least look up for:
+ * every total and annular eclipse of the Sun, every total eclipse of the Moon.
+ */
+export function worthSeeing(eclipse: Eclipse): boolean {
+  if (eclipse.kind === 'solar') return eclipse.type !== 'partial'
+  return eclipse.type === 'total'
 }
 
 /**
