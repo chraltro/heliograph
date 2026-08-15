@@ -449,6 +449,25 @@ test('an eclipse puts the Moon shadow on the ground', async () => {
   expect(luma(await sampleAt(-74, 40.7))).toBeGreaterThan(shadowed * 3)
 })
 
+test('the almanac opens closed, and can always be closed again', async () => {
+  // A panel that covers the map must not restore itself, and must be closable
+  // from inside itself: remembering it was open left a returning visitor on a
+  // phone staring at a full screen panel with no idea what had happened.
+  await page.reload()
+  await page.waitForFunction(() => window.__ready === true, null, { timeout: 60_000 })
+  await expect(page.locator('.almanac')).toBeHidden()
+
+  await page.locator('[data-almanac-toggle]').click()
+  await expect(page.locator('.almanac')).toBeVisible()
+  await page.locator('[data-almanac-close]').click()
+  await expect(page.locator('.almanac')).toBeHidden()
+
+  await page.locator('[data-almanac-toggle]').click()
+  await expect(page.locator('.almanac')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.almanac')).toBeHidden()
+})
+
 test('the almanac lists eclipses and jumps to one', async () => {
   await apply('?t=2026-08-14T12:00:00Z&play=off&tz=UTC&pin=59.92,10.75&layers=places')
   await page.locator('[data-almanac-toggle]').click()
@@ -603,6 +622,24 @@ test.describe('on a phone', () => {
       return canvas.width / canvas.clientWidth
     })
     expect(density).toBeCloseTo(3, 1)
+  })
+
+  /** On a phone the almanac must leave the map and the sheet reachable. */
+  test('the almanac fits the phone rather than covering it', async () => {
+    await phone.locator('[data-almanac-toggle]').click()
+    await expect(phone.locator('.almanac')).toBeVisible()
+    const fits = await phone.evaluate(() => {
+      const panel = document.querySelector('.almanac')!.getBoundingClientRect()
+      const sheet = document.querySelector('.console')!.getBoundingClientRect()
+      return {
+        withinWidth: panel.left >= 0 && panel.right <= window.innerWidth,
+        clearOfSheet: panel.bottom <= sheet.top,
+        belowRail: panel.top > 40,
+      }
+    })
+    expect(fits).toEqual({ withinWidth: true, clearOfSheet: true, belowRail: true })
+    await phone.locator('[data-almanac-close]').click()
+    await expect(phone.locator('.almanac')).toBeHidden()
   })
 
   test('the touch targets are big enough to hit', async () => {

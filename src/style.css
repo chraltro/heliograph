@@ -1008,16 +1008,6 @@ select:hover {
     background-size: 15px;
   }
 
-  .almanac {
-    position: fixed;
-    top: calc(env(safe-area-inset-top) + 56px);
-    left: max(var(--space-3), env(safe-area-inset-left));
-    right: max(var(--space-3), env(safe-area-inset-right));
-    width: auto;
-    max-height: calc(100dvh - 220px);
-    z-index: 7;
-  }
-
   .layers {
     position: fixed;
     top: calc(env(safe-area-inset-top) + 56px);
@@ -1530,4 +1520,66 @@ select:hover {
   color: var(--ink-400);
   font-size: 9.5px;
   white-space: nowrap;
+}
+
+
+/* ------------------------------------------------------- almanac on a phone
+ *
+ * These have to sit at the end of the file. The phone shell's media query is
+ * further up, and the almanac's own base rules were added after it: at equal
+ * specificity the later rule wins, so stating the phone case up there left a
+ * 384 pixel panel pinned to the corner of a 390 pixel screen, covering the map
+ * and everything on it.
+ */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .almanac {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 58px);
+    left: max(var(--space-3), env(safe-area-inset-left));
+    right: max(var(--space-3), env(safe-area-inset-right));
+    width: auto;
+    /* Never taller than the space between the rail and the sheet, so the map
+       is always visible behind it and the sheet is always reachable. */
+    max-height: calc(100vh - var(--sheet-peek, 150px) - 96px);
+    max-height: calc(100dvh - var(--sheet-peek, 150px) - 96px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    z-index: 4;
+  }
+
+  .almanac-columns {
+    gap: var(--space-3);
+  }
+}
+
+/* A panel that can be opened has to be closable from inside itself, whatever
+   the rail is doing. */
+.panel-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-400);
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.panel-close svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  fill: none;
+}
+
+.panel-close:hover {
+  color: var(--ink-800);
+  background: var(--ink-100);
 }

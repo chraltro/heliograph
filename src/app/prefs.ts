@@ -26,11 +26,9 @@ export interface Preferences {
   rate: number | null
   /** Places the viewer has starred, most recent first. */
   saved: SavedPlace[]
-  /** Whether the almanac panel is open. */
-  almanac: boolean
 }
 
-const EMPTY: Preferences = { layers: null, basis: null, rate: null, saved: [], almanac: false }
+const EMPTY: Preferences = { layers: null, basis: null, rate: null, saved: [] }
 
 function storage(): Storage | null {
   try {
@@ -66,7 +64,6 @@ export function loadPreferences(): Preferences {
             )
             .slice(0, 24)
         : [],
-      almanac: parsed.almanac === true,
     }
   } catch {
     // Corrupt or foreign data is not worth a crash; start fresh.

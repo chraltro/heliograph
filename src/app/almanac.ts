@@ -71,6 +71,7 @@ export class Almanac {
   onJump: ((time: number, place: { lon: number; lat: number } | null) => void) | null = null
   private readonly ctx: CanvasRenderingContext2D
   private dpr = 1
+  private lastKey = ''
   private chartCache: { key: string; days: Array<{ rise: number | null; set: number | null; polar: string | null }> } | null =
     null
 
@@ -78,6 +79,9 @@ export class Almanac {
     this.element = document.createElement('div')
     this.element.className = 'panel almanac'
     this.element.innerHTML = /* html */ `
+      <button type="button" class="panel-close" data-almanac-close aria-label="Close the almanac">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l10 10M11 1L1 11"/></svg>
+      </button>
       <p class="micro panel-title">Almanac</p>
       <p class="almanac-place" data-almanac-title>—</p>
       <div class="almanac-columns">
@@ -119,10 +123,20 @@ export class Almanac {
 
   setHidden(hidden: boolean): void {
     this.element.toggleAttribute('hidden', hidden)
+    // Opening again has to refill, even if no time has passed since it closed.
+    if (!hidden) this.lastKey = ''
   }
 
   update(site: AlmanacSite, time: number, dpr: number): void {
     if (this.hidden) return
+    // Everything here is quoted to the minute, so recomputing it sixty times a
+    // second, or four times a second as the live clock ticks, is that much work
+    // thrown away: the Moon's rise and set alone is a hundred and forty five
+    // lunar positions. Rebuild when the minute or the place changes, and not
+    // otherwise.
+    const key = `${Math.floor(time / MS_PER_MINUTE)}|${site.lat.toFixed(3)},${site.lon.toFixed(3)}|${site.zone}|${dpr}`
+    if (key === this.lastKey) return
+    this.lastKey = key
     this.dpr = dpr
     this.title.textContent = site.country ? `${site.name}, ${site.country}` : site.name || 'Open water'
 

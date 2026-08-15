@@ -1234,6 +1234,11 @@ export class Heliograph {
         case 'A':
           this.q<HTMLButtonElement>('[data-almanac-toggle]').click()
           break
+        case 'Escape':
+          if (!this.almanac.hidden) this.setAlmanac(false)
+          this.q('[data-layers]').setAttribute('hidden', '')
+          this.q('[data-layers-toggle]').setAttribute('aria-expanded', 'false')
+          break
         case '/':
           event.preventDefault()
           this.q<HTMLButtonElement>('[data-search-toggle]').click()
@@ -1847,8 +1852,15 @@ export class Heliograph {
   private buildAlmanac(): void {
     this.almanac = new Almanac()
     this.almanac.element.id = 'almanac'
-    this.almanac.setHidden(!this.prefs.almanac)
+    // Always closed on arrival. Remembering that it was open meant a returning
+    // visitor met a full panel over the map with no idea why, and on a phone
+    // that is most of the screen.
+    this.almanac.setHidden(true)
     this.stage.append(this.almanac.element)
+
+    this.almanac.element
+      .querySelector('[data-almanac-close]')
+      ?.addEventListener('click', () => this.setAlmanac(false))
 
     // Picking an eclipse takes the map to it, and to where it is deepest.
     this.almanac.onJump = (time, place) => {
@@ -1862,17 +1874,17 @@ export class Heliograph {
     }
 
     const toggle = this.q<HTMLButtonElement>('[data-almanac-toggle]')
-    toggle.setAttribute('aria-expanded', String(!this.almanac.hidden))
-    toggle.addEventListener('click', () => {
-      this.almanac.setHidden(!this.almanac.hidden)
-      toggle.setAttribute('aria-expanded', String(!this.almanac.hidden))
-      this.prefs.almanac = !this.almanac.hidden
-      this.storePreferences()
-      // Fill it now rather than on the next frame: a panel that opens empty and
-      // populates a beat later reads as a stall.
-      this.draw()
-      this.markDirty()
-    })
+    toggle.setAttribute('aria-expanded', 'false')
+    toggle.addEventListener('click', () => this.setAlmanac(this.almanac.hidden))
+  }
+
+  private setAlmanac(open: boolean): void {
+    this.almanac.setHidden(!open)
+    this.q('[data-almanac-toggle]').setAttribute('aria-expanded', String(open))
+    // Fill it now rather than on the next frame: a panel that opens empty and
+    // populates a beat later reads as a stall.
+    this.draw()
+    this.markDirty()
   }
 
   // ------------------------------------------------------------------ places
