@@ -693,6 +693,42 @@ describe('analemma', () => {
       expect(p.lon).toBe(s.subsolarLon)
     }
   })
+
+  /**
+   * The figure is where the Sun stands at the same clock time each day, so the
+   * subsolar point has to sit on it. That only holds if the hour it is drawn
+   * for is the actual hour on screen: the Earth turns a quarter of a degree
+   * every minute, so a figure snapped to the top of the hour is up to seven and
+   * a half degrees away from the Sun it is supposed to be threading.
+   */
+  test('the figure passes through the subsolar point at any time of day', () => {
+    const distanceToFigure = (instant: number, drawnForHour: number) => {
+      const sun = solarState(instant)
+      const points = analemma(new Date(instant).getUTCFullYear(), drawnForHour, 183)
+      return Math.min(
+        ...points.map((p) => {
+          const dLon = ((((p.lon - sun.subsolarLon + 180) % 360) + 360) % 360) - 180
+          return Math.hypot(dLon, p.lat - sun.subsolarLat)
+        }),
+      )
+    }
+
+    for (const [hour, minute] of [[13, 34], [7, 5], [0, 30], [23, 59], [12, 0]] as const) {
+      const instant = Date.UTC(2026, 7, 14, hour, minute, 0)
+      const fractional = hour + minute / 60
+      // Sampling every other day, the curve's own vertices are up to about a
+      // fifth of a degree apart near the solstices, which bounds this.
+      expect(distanceToFigure(instant, fractional), `${hour}:${minute}`).toBeLessThan(0.25)
+    }
+
+    // And the defect this guards against: snapped to the whole hour, thirty
+    // four minutes of rotation puts the whole figure 8.5 degrees east of the
+    // Sun. The gap measured to the nearest point on the curve comes out a
+    // little under that, because the figure is a loop some seven degrees wide
+    // and its far limb reaches back toward where the Sun actually is.
+    const off = distanceToFigure(Date.UTC(2026, 7, 14, 13, 34, 0), 13)
+    expect(off).toBeGreaterThan(5)
+  })
 })
 
 describe('seasonInstant (TV-18)', () => {

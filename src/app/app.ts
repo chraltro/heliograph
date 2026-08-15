@@ -21,6 +21,7 @@ import {
   dayEvents,
   localSolar,
   MS_PER_DAY,
+  MS_PER_HOUR,
   MS_PER_MINUTE,
   solarState,
   type SolarState,
@@ -1574,14 +1575,27 @@ export class Heliograph {
     return labels
   }
 
+  /**
+   * The analemma for the exact instant on screen, not for the top of the hour.
+   *
+   * The figure is where the Sun stands at the *same clock time* each day, so it
+   * is anchored to a time of day and the subsolar point must sit on it. Taken
+   * at a whole hour, it drifts a quarter of a degree for every minute past the
+   * hour, which puts the marker up to seven and a half degrees off the curve it
+   * is supposed to be riding. The hour is therefore fractional, quantised to a
+   * second so that an animation does not rebuild the curve for changes far
+   * below a pixel.
+   */
   private buildAnalemma(): Array<{ lon: number; lat: number }> {
-    const reading = readingIn('UTC', this.time)
-    const hour = reading.hour
-    if (this.analemmaCache && this.analemmaCache.year === reading.year && this.analemmaCache.hour === hour) {
+    const year = new Date(this.time).getUTCFullYear()
+    // UTC days start at the epoch, so the hour of day is plain arithmetic.
+    const dayMs = ((this.time % MS_PER_DAY) + MS_PER_DAY) % MS_PER_DAY
+    const hour = Math.round((dayMs / MS_PER_HOUR) * 3600) / 3600
+    if (this.analemmaCache && this.analemmaCache.year === year && this.analemmaCache.hour === hour) {
       return this.analemmaCache.points
     }
-    const points = analemma(reading.year, hour, 183).map((p) => ({ lon: p.lon, lat: p.lat }))
-    this.analemmaCache = { year: reading.year, hour, points }
+    const points = analemma(year, hour, 183).map((p) => ({ lon: p.lon, lat: p.lat }))
+    this.analemmaCache = { year, hour, points }
     return points
   }
 }
