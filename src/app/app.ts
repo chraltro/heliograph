@@ -26,6 +26,7 @@ import {
   type SolarState,
 } from '../solar/solar.ts'
 import { isValidZone, listZones, localZone, wallClockToUtc, zoneOffsetMinutes } from '../time/timezone.ts'
+import terrainUrl from '../assets/terrain.webp'
 import {
   formatAzimuth,
   formatClock,
@@ -197,6 +198,7 @@ export class Heliograph {
   private time = Date.now()
   private basis = 'UTC'
   private mode: MotionMode = 'live'
+  private lastMotion: Exclude<MotionMode, 'paused'> = 'live'
   private rate = 1
   private view: View = { centerLon: 0, centerLat: 0, zoom: 1 }
   private size: Size = { width: 1, height: 1 }
@@ -244,6 +246,7 @@ export class Heliograph {
 
     this.renderer = new MapRenderer(this.mapCanvas, this.world)
     this.overlay = new MapOverlay(this.overlayCanvas)
+    this.loadTerrain()
 
     this.basis = localZone()
     this.focus = this.defaultSite()
@@ -308,7 +311,10 @@ export class Heliograph {
 
     const play = params.get('play')
     if (play === 'off') this.mode = 'paused'
-    else if (play === 'live' || play === 'day' || play === 'year') this.mode = play
+    else if (play === 'live' || play === 'day' || play === 'year') {
+      this.mode = play
+      this.lastMotion = play
+    }
     const rate = Number(params.get('rate'))
     if ([0.5, 1, 2, 4].includes(rate)) this.rate = rate
 
@@ -576,6 +582,8 @@ export class Heliograph {
       button.title = hint
       button.addEventListener('click', () => {
         this.mode = this.mode === value ? 'paused' : value
+        // Remember what was chosen even across a pause, so play resumes it.
+        this.lastMotion = value
         if (this.mode === 'live') this.setTime(Date.now())
         this.syncTransport()
         this.markDirty()
@@ -621,8 +629,12 @@ export class Heliograph {
     }
   }
 
+  /**
+   * Play resumes whatever was playing before the pause. Somebody who paused a
+   * day sweep asked for the day sweep back, not for the live clock.
+   */
   private togglePlay(): void {
-    this.mode = this.mode === 'paused' ? 'live' : 'paused'
+    this.mode = this.mode === 'paused' ? this.lastMotion : 'paused'
     if (this.mode === 'live') this.setTime(Date.now())
     this.syncTransport()
     if (this.mode === 'live') this.startLiveTimer()
@@ -809,16 +821,15 @@ export class Heliograph {
    */
   private buildSheet(): void {
     const sheet = this.q<HTMLElement>('[data-console]')
-    const grip = this.q<HTMLButtonElement>('[data-sheet-toggle]')
     this.sheetEl = sheet
 
     this.sheetMedia = window.matchMedia(SHEET_MEDIA)
     this.sheetMedia.addEventListener('change', () => this.syncSheet())
     new ResizeObserver(() => this.syncSheet()).observe(sheet)
 
-    // Drag follows the finger; a short movement counts as a tap and toggles.
-    // The clock face works as a handle too, the way a native sheet's whole
-    // header does, not just the grip bar.
+    // The whole sheet is the handle: a drag starting anywhere that is not a
+    // control follows the finger, the way a native sheet behaves. A short
+    // movement on the grip or the clock counts as a tap and toggles.
     let startY = 0
     let startShift = 0
     let moved = 0
@@ -826,49 +837,71 @@ export class Heliograph {
     let lastAt = 0
     let velocity = 0
     let dragging = false
+    // Pointer capture retargets every later event to the sheet itself, so the
+    // element the finger actually landed on has to be remembered from the start.
+    let downTarget: Element | null = null
 
-    const attachDrag = (handle: HTMLElement) => {
-      handle.addEventListener('pointerdown', (event) => {
-        if (!this.sheetMedia.matches) return
-        dragging = true
-        moved = 0
-        startY = lastY = event.clientY
-        lastAt = performance.now()
-        velocity = 0
-        startShift = this.sheetOpen ? 0 : this.sheetClosedShift
-        handle.setPointerCapture(event.pointerId)
-        sheet.classList.add('is-dragging')
-      })
-      handle.addEventListener('pointermove', (event) => {
-        if (!dragging) return
-        const now = performance.now()
-        const dy = event.clientY - lastY
-        if (now > lastAt) velocity = dy / (now - lastAt)
-        lastY = event.clientY
-        lastAt = now
-        moved = Math.max(moved, Math.abs(event.clientY - startY))
-        const shift = Math.min(this.sheetClosedShift, Math.max(0, startShift + event.clientY - startY))
-        sheet.style.setProperty('--sheet-shift', `${shift}px`)
-      })
-      const settle = (event: PointerEvent) => {
-        if (!dragging) return
-        dragging = false
-        sheet.classList.remove('is-dragging')
-        if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
-        if (moved < 6) {
-          this.setSheet(!this.sheetOpen)
-          return
-        }
-        const shift = startShift + lastY - startY
-        // A flick goes the way it was thrown; a slow drag settles to the nearer stop.
-        const open = Math.abs(velocity) > 0.4 ? velocity < 0 : shift < this.sheetClosedShift / 2
-        this.setSheet(open)
+    const isControl = (target: EventTarget | null) =>
+      target instanceof Element &&
+      target.closest('button:not([data-sheet-toggle]), select, input, a, .scrubber-surface') !== null
+
+    sheet.addEventListener('pointerdown', (event) => {
+      if (!this.sheetMedia.matches || isControl(event.target)) return
+      // When the sheet's own content is scrolled, a downward swipe means
+      // "scroll back up", not "close the sheet".
+      if (sheet.scrollTop > 1) return
+      dragging = true
+      moved = 0
+      startY = lastY = event.clientY
+      lastAt = performance.now()
+      velocity = 0
+      startShift = this.sheetOpen ? 0 : this.sheetClosedShift
+      downTarget = event.target instanceof Element ? event.target : null
+      sheet.setPointerCapture(event.pointerId)
+    })
+    sheet.addEventListener('pointermove', (event) => {
+      if (!dragging) return
+      const now = performance.now()
+      const dy = event.clientY - lastY
+      if (now > lastAt) velocity = dy / (now - lastAt)
+      lastY = event.clientY
+      lastAt = now
+      moved = Math.max(moved, Math.abs(event.clientY - startY))
+      if (moved > 4) sheet.classList.add('is-dragging')
+      const shift = Math.min(this.sheetClosedShift, Math.max(0, startShift + event.clientY - startY))
+      sheet.style.setProperty('--sheet-shift', `${shift}px`)
+    })
+    const settle = (event: PointerEvent) => {
+      if (!dragging) return
+      dragging = false
+      sheet.classList.remove('is-dragging')
+      if (sheet.hasPointerCapture(event.pointerId)) sheet.releasePointerCapture(event.pointerId)
+      if (moved < 6) {
+        // A plain tap toggles only on the parts that read as a handle.
+        const onHandle =
+          downTarget !== null &&
+          (downTarget.closest('[data-sheet-toggle]') !== null || downTarget.closest('.clock') !== null)
+        if (onHandle) this.setSheet(!this.sheetOpen)
+        else this.syncSheet()
+        return
       }
-      handle.addEventListener('pointerup', settle)
-      handle.addEventListener('pointercancel', settle)
+      const shift = startShift + lastY - startY
+      // A flick goes the way it was thrown; a slow drag settles to the nearer stop.
+      const open = Math.abs(velocity) > 0.4 ? velocity < 0 : shift < this.sheetClosedShift / 2
+      this.setSheet(open)
     }
-    attachDrag(grip)
-    attachDrag(this.q('.clock'))
+    sheet.addEventListener('pointerup', settle)
+    sheet.addEventListener('pointercancel', settle)
+
+    // iOS will otherwise cancel the pointer stream the moment it decides the
+    // finger is a scroll. While a drag is live, the touches belong to the sheet.
+    sheet.addEventListener(
+      'touchmove',
+      (event) => {
+        if (dragging) event.preventDefault()
+      },
+      { passive: false },
+    )
 
     // Touching the map puts the map first: the sheet folds back down.
     this.overlayCanvas.addEventListener('pointerdown', () => {
@@ -918,6 +951,23 @@ export class Heliograph {
     const site = this.referenceSite()
     this.view = clampView(this.size, { centerLon: site.lon, centerLat: site.lat, zoom: this.fillZoom() })
     this.markDirty()
+  }
+
+  /**
+   * The real land albedo, decoded off the critical path. The first frame draws
+   * from the spectral ramp alone; the terrain fades in the moment it arrives.
+   */
+  private loadTerrain(): void {
+    const image = new Image()
+    image.decoding = 'async'
+    image.src = terrainUrl
+    image
+      .decode()
+      .then(() => {
+        this.renderer.setTerrain(image)
+        this.markDirty()
+      })
+      .catch(() => undefined)
   }
 
   /**
@@ -1309,7 +1359,9 @@ export class Heliograph {
     const overlayLayers: OverlayLayers = {
       graticule: this.layers.graticule ?? true,
       boundaries: this.layers.boundaries ?? true,
-      timezones: this.layers.timezones ?? false,
+      // Matching clocks are shown on the zones, so asking for the match is
+      // asking for the zones: without this the toggle would do nothing alone.
+      timezones: (this.layers.timezones || this.layers.matchClock) ?? false,
       places: this.layers.places ?? true,
       analemma: this.layers.analemma ?? false,
     }

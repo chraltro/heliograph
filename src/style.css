@@ -493,10 +493,8 @@ select:hover {
 }
 
 /*
- * The clock is the one place the display face appears. Bodoni Moda's x height is
- * 0.46 em against Archivo's 0.526, so it needs about 14 percent more size to sit
- * optically level with the labels around it. Its tabular advance shifts with
- * weight, so the weight here is fixed and must stay fixed.
+ * The clock reads like the instrument it is: the mono face, whose tabular
+ * digits hold their advance so nothing shivers as the seconds run.
  */
 .clock {
   text-align: center;
@@ -517,13 +515,13 @@ select:hover {
 }
 
 .clock-time {
-  font-family: var(--font-display);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
-  font-size: 50px;
-  font-weight: 400;
-  line-height: 1.06;
-  letter-spacing: 0.005em;
+  font-size: 33px;
+  font-weight: 480;
+  line-height: 1.25;
+  letter-spacing: -0.04em;
   color: var(--ink-800);
 }
 
@@ -723,7 +721,7 @@ select:hover {
   }
 
   .clock-time {
-    font-size: 40px;
+    font-size: 28px;
   }
 }
 
@@ -801,7 +799,7 @@ select:hover {
   }
 
   .clock-time {
-    font-size: 32px;
+    font-size: 24px;
   }
 
   .place-name {
@@ -1112,8 +1110,8 @@ select:hover {
   }
 
   .clock-time {
-    font-size: 34px;
-    line-height: 1.05;
+    font-size: 25px;
+    line-height: 1.3;
   }
 
   .clock-zone {
