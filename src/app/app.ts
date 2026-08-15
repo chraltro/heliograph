@@ -1049,6 +1049,7 @@ export class Heliograph {
     const target = this.overlayCanvas
     const active = new Map<number, { x: number; y: number }>()
     let travelled = 0
+    let startPoint = { x: 0, y: 0 }
     let lastTapAt = 0
 
     const local = (event: { clientX: number; clientY: number }) => {
@@ -1069,7 +1070,9 @@ export class Heliograph {
 
     target.addEventListener('pointerdown', (event) => {
       target.setPointerCapture(event.pointerId)
-      active.set(event.pointerId, local(event))
+      const start = local(event)
+      active.set(event.pointerId, start)
+      startPoint = start
       travelled = 0
       lastPinch = active.size === 2 ? pinch() : null
       if (event.pointerType === 'touch') this.hover = null
@@ -1131,7 +1134,14 @@ export class Heliograph {
       target.style.cursor = ''
       if (!wasDragging || active.size > 0) return
 
-      if (travelled < 6) {
+      // A tap is judged by how far the finger ended from where it started, not
+      // by how far it wandered getting there. Summing every small movement
+      // along the way punishes a slow finger, and a finger always rolls a
+      // little: the old accumulation crossed six pixels on contact alone, so
+      // taps were being read as drags and the pin never moved.
+      const displacement = Math.hypot(point.x - startPoint.x, point.y - startPoint.y)
+      const slop = event.pointerType === 'touch' ? 12 : 4
+      if (displacement <= slop && travelled < 90) {
         const [lon, lat] = unproject(this.size, this.view, point.x, point.y)
         if (Math.abs(lat) <= 90) {
           // A second tap in the same spot zooms, the way every map does.

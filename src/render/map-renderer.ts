@@ -48,7 +48,7 @@ export const DEFAULT_TUNING: Tuning = {
   coastWidth: 0.9,
   coastIntensity: 0.5,
   coastDayFade: 0.16,
-  moonlight: 0.05,
+  moonlight: 0.008,
   borderWidth: 0.85,
   borderIntensity: 0.28,
   sunspotSize: 14,
