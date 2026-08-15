@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest'
-import { findEclipses, obscurationAt, geometry, solarEclipseNear, lunarEclipseNear } from '../src/solar/eclipse.ts'
+import {
+  centralPath,
+  findEclipses,
+  obscurationAt,
+  geometry,
+  solarEclipseNear,
+  lunarEclipseNear,
+} from '../src/solar/eclipse.ts'
 import { MS_PER_DAY, MS_PER_MINUTE } from '../src/solar/solar.ts'
 
 const utc = (iso: string) => Date.parse(iso)
@@ -102,6 +109,75 @@ describe('the catalogue', () => {
       // month less; anything closer means the search double counted one.
       expect((solar[i]! - solar[i - 1]!) / MS_PER_DAY).toBeGreaterThan(20)
     }
+  })
+
+  /**
+   * The track is checked against places whose totality times are common
+   * knowledge, because a path is only useful if it passes through the towns the
+   * newspapers named. The tolerances are the width of a real umbra, sixty odd
+   * kilometres, and a few minutes of clock.
+   */
+  describe('the path of totality', () => {
+    const nearest = (path: ReturnType<typeof centralPath>, lon: number, lat: number) => {
+      let best = path.central[0]!
+      let bestKm = Infinity
+      for (const point of path.central) {
+        const dx = (point.lon - lon) * Math.cos((lat * Math.PI) / 180)
+        const km = Math.hypot(dx, point.lat - lat) * 111.32
+        if (km < bestKm) {
+          bestKm = km
+          best = point
+        }
+      }
+      return { km: bestKm, time: best.time }
+    }
+
+    test('crosses the United States on 21 August 2017 on schedule', () => {
+      const path = centralPath(utc('2017-08-21T18:26:00Z'))
+      expect(path.type).toBe('total')
+      // Lincoln City, Oregon at 17:16 and Charleston, South Carolina at 18:47.
+      const oregon = nearest(path, -124.0, 44.96)
+      expect(oregon.km).toBeLessThan(80)
+      expect(Math.abs(oregon.time - utc('2017-08-21T17:16:00Z')) / MS_PER_MINUTE).toBeLessThan(6)
+      const carolina = nearest(path, -79.93, 32.78)
+      expect(carolina.km).toBeLessThan(80)
+      expect(Math.abs(carolina.time - utc('2017-08-21T18:47:00Z')) / MS_PER_MINUTE).toBeLessThan(6)
+    })
+
+    test('crosses Mexico, Texas and Ohio on 8 April 2024 on schedule', () => {
+      const path = centralPath(utc('2024-04-08T18:18:00Z'))
+      for (const [lon, lat, iso] of [
+        [-106.42, 23.25, '2024-04-08T18:07:00Z'],
+        [-96.8, 32.78, '2024-04-08T18:42:00Z'],
+        [-81.69, 41.5, '2024-04-08T19:15:00Z'],
+      ] as const) {
+        const hit = nearest(path, lon, lat)
+        expect(hit.km).toBeLessThan(80)
+        expect(Math.abs(hit.time - utc(iso)) / MS_PER_MINUTE).toBeLessThan(6)
+      }
+    })
+
+    test('runs west to east through the point of greatest eclipse', () => {
+      const path = centralPath(utc('2027-08-02T10:07:00Z'))
+      expect(path.central.length).toBeGreaterThan(40)
+      const greatest = path.greatest!
+      // Greatest eclipse lies on the track it is the middle of.
+      const hit = nearest(path, greatest.lon, greatest.lat)
+      expect(hit.km).toBeLessThan(40)
+      expect(Math.abs(hit.time - path.time) / MS_PER_MINUTE).toBeLessThan(4)
+      // The shadow always travels eastward relative to the ground.
+      const first = path.central[0]!
+      const last = path.central[path.central.length - 1]!
+      const swept = ((last.lon - first.lon + 540) % 360) - 180
+      expect(swept).toBeGreaterThan(60)
+    })
+
+    test('gives a partial eclipse no track at all', () => {
+      // 2025-03-29 is partial everywhere: the axis passes north of the Earth.
+      const path = centralPath(utc('2025-03-29T10:47:00Z'))
+      expect(path.type).toBe('partial')
+      expect(path.central.length).toBe(0)
+    })
   })
 
   test('covers a century without going lame', () => {

@@ -388,6 +388,41 @@ export function findEclipses(from: number, to: number): Eclipse[] {
   return found
 }
 
+export interface EclipseTrack {
+  /** Where the shadow axis meets the ground, in order through the eclipse. */
+  readonly central: Array<{ lon: number; lat: number; time: number }>
+  /** The point of greatest eclipse, which lies on that line. */
+  readonly greatest: { lon: number; lat: number } | null
+  readonly type: SolarEclipse['type']
+  readonly time: number
+}
+
+/**
+ * The path of totality: where the Moon's shadow actually goes.
+ *
+ * A central eclipse is not an event at a place, it is a place moving. The
+ * shadow axis sweeps a track a few tens of kilometres wide and thousands long,
+ * usually west to east, in three or four hours, and the point of greatest
+ * eclipse is only the middle of that. Reporting the point alone is like giving
+ * one frame of a film: it says Egypt when the answer is Spain, then North
+ * Africa, then Egypt, then Saudi Arabia.
+ *
+ * Tracing it is the same axis intersection as everything else, walked in time,
+ * so it needs no new theory: sample the hours around greatest eclipse, keep the
+ * instants where the axis reaches the ground, and the points come out in order.
+ */
+export function centralPath(nearTime: number, stepMinutes = 3): EclipseTrack {
+  const eclipse = solarEclipseNear(nearTime)
+  const central: Array<{ lon: number; lat: number; time: number }> = []
+  const step = stepMinutes * MS_PER_MINUTE
+  // Four hours either side covers the longest track the geometry allows.
+  for (let t = eclipse.time - 4 * MS_PER_HOUR; t <= eclipse.time + 4 * MS_PER_HOUR; t += step) {
+    const { hit } = axisApproach(geometry(t))
+    if (hit) central.push({ ...toGround(t, hit), time: t })
+  }
+  return { central, greatest: eclipse.greatest, type: eclipse.type, time: eclipse.time }
+}
+
 /**
  * The Sun and Moon as the renderer wants them: unit directions, distances and
  * angular radii, so the shader can work out the obscuration at every pixel

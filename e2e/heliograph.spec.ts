@@ -449,6 +449,39 @@ test('an eclipse puts the Moon shadow on the ground', async () => {
   expect(luma(await sampleAt(-74, 40.7))).toBeGreaterThan(shadowed * 3)
 })
 
+test('an eclipse is drawn as the line it is, not as a spot', async () => {
+  await apply('?t=2017-08-21T18:26:00Z&play=off&tz=UTC&z=1&lon=-60&lat=25&layers=')
+
+  /** Whether the overlay has anything sun coloured within a few pixels. */
+  const warmNear = async (lon: number, lat: number, radius = 6) =>
+    page.evaluate(
+      ([a, b, r]) => {
+        const [x, y] = window.__heliograph!.locate(a!, b!)
+        const canvas = document.querySelector('.overlay') as HTMLCanvasElement
+        const context = canvas.getContext('2d')!
+        const size = r! * 2 + 1
+        const data = context.getImageData(Math.round(x) - r!, Math.round(y) - r!, size, size).data
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3]! > 120 && data[i]! > 210 && data[i + 1]! > 150 && data[i + 2]! < 130) return true
+        }
+        return false
+      },
+      [lon, lat, radius] as const,
+    )
+
+  // Three places on the 2017 track, an hour apart, all of them a long way from
+  // the point of greatest eclipse in Kentucky.
+  expect(await warmNear(-124.0, 44.96)).toBe(true)
+  expect(await warmNear(-86.78, 36.17)).toBe(true)
+  expect(await warmNear(-79.93, 32.78)).toBe(true)
+  // And nowhere near it, so this is a path rather than a wash of colour.
+  expect(await warmNear(-47.9, -15.8)).toBe(false)
+
+  // A day later there is no eclipse and therefore no line.
+  await apply('?t=2017-08-22T18:26:00Z&play=off&tz=UTC&z=1&lon=-60&lat=25&layers=')
+  expect(await warmNear(-86.78, 36.17)).toBe(false)
+})
+
 test('the almanac opens closed, and can always be closed again', async () => {
   // A panel that covers the map must not restore itself, and must be closable
   // from inside itself: remembering it was open left a returning visitor on a
@@ -483,6 +516,15 @@ test('the almanac lists eclipses and jumps to one', async () => {
   // The first after 14 August 2026 is the annular of 6 February 2027.
   expect(listed[0]).toContain('06 FEB 2027')
   expect(listed[0]).toContain('Annular solar')
+
+  // A solar eclipse is placed somewhere a reader has heard of. The total of
+  // August 2027 is greatest over Upper Egypt, a few miles from Luxor.
+  const egypt = listed.find((row) => row.includes('02 AUG 2027'))
+  expect(egypt).toContain('Egypt')
+
+  // The short list goes up at once and the long one fills in behind it, so
+  // there is a run of them to scroll rather than a handful.
+  await expect.poll(() => page.locator('.almanac-eclipse').count(), { timeout: 15_000 }).toBeGreaterThan(24)
 
   await page.locator('.almanac-eclipse button').first().click()
   await expect(page.locator('[data-date]')).toHaveText('SAT 06 FEB 2027')
@@ -638,6 +680,29 @@ test.describe('on a phone', () => {
       }
     })
     expect(fits).toEqual({ withinWidth: true, clearOfSheet: true, belowRail: true })
+
+    // And it must scroll under a finger. The stage used to refuse the browser's
+    // own panning on behalf of everything inside it, canvases and panels alike,
+    // which left a panel taller than the screen with no way to reach its foot.
+    await expect
+      .poll(() => phone.locator('.almanac-eclipse').count(), { timeout: 15_000 })
+      .toBeGreaterThan(24)
+    const scroll = await phone.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>('.almanac')!
+      const chain: string[] = []
+      for (let node: HTMLElement | null = panel; node; node = node.parentElement) {
+        chain.push(getComputedStyle(node).touchAction)
+      }
+      panel.scrollTop = 10_000
+      return {
+        overflows: panel.scrollHeight > panel.clientHeight + 8,
+        reached: panel.scrollTop > 0,
+        // "none" anywhere up the chain and a touch drag never becomes a scroll.
+        blocked: chain.some((value) => value === 'none'),
+      }
+    })
+    expect(scroll).toEqual({ overflows: true, reached: true, blocked: false })
+
     await phone.locator('[data-almanac-close]').click()
     await expect(phone.locator('.almanac')).toBeHidden()
   })

@@ -30,7 +30,7 @@ import {
   type SolarState,
 } from '../solar/solar.ts'
 import { moonlight, moonPhase, moonState, type MoonPhase, type MoonState } from '../solar/moon.ts'
-import { shadowUniforms } from '../solar/eclipse.ts'
+import { centralPath, shadowUniforms, type EclipseTrack } from '../solar/eclipse.ts'
 import { isValidZone, listZones, localZone, wallClockToUtc, zoneOffsetMinutes } from '../time/timezone.ts'
 import terrainUrl from '../assets/terrain.webp'
 import terrainSeasonUrl from '../assets/terrain-season.webp'
@@ -253,6 +253,8 @@ export class Heliograph {
   private moonCache: { time: number; state: MoonState; phase: MoonPhase; gain: number } | null = null
   private daylitCache: { minute: number; value: number } | null = null
   private zoneOffsetDay = Number.NaN
+  /** The ground track of the eclipse currently on the map, if there is one. */
+  private track: EclipseTrack | null = null
   private almanac!: Almanac
   private search!: PlaceSearch
   private closeSearch: (() => void) | null = null
@@ -1458,6 +1460,7 @@ export class Heliograph {
           ? { lon: moon.state.sublunarLon, lat: moon.state.sublunarLat, gain: moon.gain }
           : null,
       localTime: this.layers.localTime ? this.localTimeFrame() : null,
+      // Also decides this.track, which the overlay draws further down.
       eclipse: this.eclipseFrame(),
       layers: mapLayers,
       time: 0,
@@ -1493,6 +1496,7 @@ export class Heliograph {
             waxing: moon.phase.waxing,
           }
         : null,
+      eclipsePath: this.track,
       localTime: this.layers.localTime ?? false,
       hover: this.hover,
       pinned: this.focus ? { lon: this.focus.lon, lat: this.focus.lat, label: this.focus.name } : null,
@@ -1705,7 +1709,16 @@ export class Heliograph {
    */
   private eclipseFrame(): Frame['eclipse'] {
     const shadow = shadowUniforms(this.time)
-    if (!shadow.possible) return null
+    if (!shadow.possible) {
+      this.track = null
+      return null
+    }
+    // Tracing the ground track walks eight hours of geometry, so it is done
+    // once on arrival rather than once a frame. Anything inside the window the
+    // stored track already covers is the same eclipse.
+    if (!this.track || Math.abs(this.time - this.track.time) > 4 * MS_PER_HOUR) {
+      this.track = centralPath(this.time)
+    }
     const thousand = (v: readonly [number, number, number]) =>
       [v[0] / 1000, v[1] / 1000, v[2] / 1000] as const
     return { sun: thousand(shadow.sun), moon: thousand(shadow.moon), gmst: shadow.siderealDegrees }
@@ -1862,6 +1875,9 @@ export class Heliograph {
       .querySelector('[data-almanac-close]')
       ?.addEventListener('click', () => this.setAlmanac(false))
 
+    this.almanac.describePoint = (lon, lat) => this.nearestPlace(lon, lat)
+    this.almanac.onRefresh = () => this.draw()
+
     // Picking an eclipse takes the map to it, and to where it is deepest.
     this.almanac.onJump = (time, place) => {
       this.mode = 'paused'
@@ -1876,6 +1892,48 @@ export class Heliograph {
     const toggle = this.q<HTMLButtonElement>('[data-almanac-toggle]')
     toggle.setAttribute('aria-expanded', 'false')
     toggle.addEventListener('click', () => this.setAlmanac(this.almanac.hidden))
+  }
+
+  /**
+   * The nearest named place to a point, if one is near enough to be worth
+   * saying. Distance is weighted by how well known the place is, because "near
+   * Cairo" is a better answer than the name of the village twenty miles closer,
+   * and nothing is offered at all beyond about fifteen hundred kilometres:
+   * eclipses do most of their travelling over open ocean, and "near Honolulu"
+   * for a shadow halfway to Tahiti is worse than saying nothing.
+   */
+  private nearestPlace(lon: number, lat: number): string | null {
+    const named = Math.min(this.world.namedCount, this.world.cities.length)
+    let best: City | null = null
+    let bestScore = Infinity
+    for (let i = 0; i < named; i++) {
+      const city = this.world.cities[i]!
+      // Equirectangular is exact enough to rank candidates, and cheap.
+      const dLat = city.lat - lat
+      const dLon = ((((city.lon - lon) % 360) + 540) % 360) - 180
+      const x = dLon * Math.cos(((city.lat + lat) / 2) * (Math.PI / 180))
+      const km = Math.sqrt(dLat * dLat + x * x) * 111.32
+      if (km > 1500) continue
+      // A capital or a metropolis earns up to a third off its distance.
+      const fame = Math.min(1, Math.log10(Math.max(1, city.population)) / 7) + (city.capital ? 0.2 : 0)
+      const score = km * (1 - 0.33 * Math.min(1, fame))
+      if (score < bestScore) {
+        bestScore = score
+        best = city
+      }
+    }
+    if (!best) return null
+    const dLat = lat - best.lat
+    const dLon = ((((lon - best.lon) % 360) + 540) % 360) - 180
+    const x = dLon * Math.cos(((best.lat + lat) / 2) * (Math.PI / 180))
+    const km = Math.round(Math.sqrt(dLat * dLat + x * x) * 111.32)
+    // Close enough to be the place itself rather than a bearing from it.
+    if (km < 60) return `${best.name}, ${best.country}`
+    // Which way, as well as how far: a distance on its own puts the answer on a
+    // circle, and there is a great deal of ocean on most of those circles.
+    const compass = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
+    const bearing = (Math.atan2(x, dLat) * (180 / Math.PI) + 360) % 360
+    return `${km} km ${compass[Math.round(bearing / 45) % 8]} of ${best.name}`
   }
 
   private setAlmanac(open: boolean): void {

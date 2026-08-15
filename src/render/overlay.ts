@@ -1,4 +1,5 @@
 import type { Polygons, WorldData } from '../data/world.ts'
+import type { EclipseTrack } from '../solar/eclipse.ts'
 import type { SolarState } from '../solar/solar.ts'
 import { INK, SUN, linearRgbToOklab, sampleSurfaceRamp } from './palette.ts'
 import { plateRect, project, worldWidth, type Size, type View } from './view.ts'
@@ -68,6 +69,8 @@ export interface OverlayFrame {
   analemma: Array<{ lon: number; lat: number }> | null
   /** Where the Moon stands overhead, and how much of it is lit. */
   moon: { lon: number; lat: number; illumination: number; waxing: boolean } | null
+  /** The ground track of the Moon's shadow, when an eclipse is under way. */
+  eclipsePath: EclipseTrack | null
   /**
    * True when every zone is drawn at its own clock rather than one instant.
    * The subsolar point and the twilight circles describe a single instant, so
@@ -88,6 +91,7 @@ interface Box {
 }
 
 const RAD = Math.PI / 180
+const MS_PER_HOUR = 3600_000
 
 export class MapOverlay {
   private readonly ctx: CanvasRenderingContext2D
@@ -133,6 +137,7 @@ export class MapOverlay {
     if (frame.layers.graticule) this.drawGraticule(frame)
     if (frame.layers.analemma && frame.analemma) this.drawAnalemma(frame)
     if (frame.layers.boundaries && !frame.localTime) this.drawTwilightBoundaries(frame)
+    if (frame.eclipsePath && !frame.localTime) this.drawEclipsePath(frame, frame.eclipsePath)
     if (!frame.localTime) this.drawSubsolar(frame)
     if (frame.moon) this.drawSublunar(frame, frame.moon)
     if (frame.layers.timezones) this.drawZoneLabels(frame)
@@ -472,6 +477,87 @@ export class MapOverlay {
       ctx.stroke()
       ctx.restore()
     }
+  }
+
+  /**
+   * The path of totality, which is the honest answer to "where".
+   *
+   * A central eclipse is not a place, it is a place moving: the shadow axis
+   * lands somewhere near sunrise, races east at better than a thousand miles an
+   * hour, and lifts off near sunset, and totality is only ever seen from the
+   * narrow band it sweeps. Marking the point of greatest eclipse alone names one
+   * frame of that and gets everybody else's answer wrong, so the whole track is
+   * drawn, with the hours marked along it to show how fast the shadow moves and
+   * roughly when it passes.
+   *
+   * The line is cased in dark before it is drawn in light, because it has to
+   * stay legible over both the day side and the night side of the same map.
+   */
+  private drawEclipsePath(frame: OverlayFrame, track: EclipseTrack): void {
+    const { ctx } = this
+    const w = worldWidth(frame.size, frame.view)
+    // Annular shadows never reach the ground, so they get the cooler ink; a
+    // total path is the one worth walking to, and reads brightest.
+    const colour = track.type === 'annular' ? SUN[600] : SUN[500]
+
+    ctx.save()
+
+    if (track.central.length > 1) {
+      const points = track.central.map(({ lon, lat }) => [lon, lat] as [number, number])
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+
+      ctx.globalAlpha *= 0.85
+      ctx.strokeStyle = INK[0]
+      ctx.lineWidth = 5.5
+      this.strokeGeoPath(frame, points, false)
+
+      ctx.strokeStyle = colour
+      ctx.lineWidth = 2.2
+      this.strokeGeoPath(frame, points, false)
+
+      // One mark per whole hour of Universal Time, found by watching the hour
+      // number change between samples rather than by hoping one lands on it.
+      ctx.lineWidth = this.hairline * this.dpr
+      for (let i = 1; i < track.central.length; i++) {
+        const previous = track.central[i - 1]!
+        const current = track.central[i]!
+        if (Math.floor(previous.time / MS_PER_HOUR) === Math.floor(current.time / MS_PER_HOUR)) continue
+        const [x, y] = project(frame.size, frame.view, current.lon, current.lat)
+        for (const offset of [-w, 0, w]) {
+          const cx = x + offset
+          if (cx < -20 || cx > frame.size.width + 20) continue
+          ctx.beginPath()
+          ctx.arc(cx, y, 2.6, 0, Math.PI * 2)
+          ctx.fillStyle = INK[0]
+          ctx.fill()
+          ctx.strokeStyle = colour
+          ctx.stroke()
+        }
+      }
+    }
+
+    // Greatest eclipse: the middle of the track, and the only marker a partial
+    // eclipse has, since its axis passes the Earth by without ever landing.
+    if (track.greatest) {
+      const [x, y] = project(frame.size, frame.view, track.greatest.lon, track.greatest.lat)
+      for (const offset of [-w, 0, w]) {
+        const cx = x + offset
+        if (cx < -30 || cx > frame.size.width + 30) continue
+        ctx.beginPath()
+        ctx.arc(cx, y, 4, 0, Math.PI * 2)
+        ctx.fillStyle = colour
+        ctx.fill()
+        ctx.globalAlpha *= 0.8
+        ctx.lineWidth = this.hairline * 1.4 * this.dpr
+        ctx.strokeStyle = colour
+        ctx.beginPath()
+        ctx.arc(cx, y, 9.5, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+    }
+
+    ctx.restore()
   }
 
   /**

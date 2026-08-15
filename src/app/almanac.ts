@@ -49,9 +49,18 @@ interface Row {
   quiet?: boolean
 }
 
-/** How far ahead to look for eclipses, and how many to print. */
+/**
+ * How far ahead to look for eclipses, and how many to print.
+ *
+ * The search is over the geometry, so a longer list costs real time: finding
+ * forty of them is a third of a second of arithmetic, which is nothing in the
+ * background and an unforgivable stall in the moment a panel is opening. So the
+ * first handful go up immediately and the rest arrive a beat later, by which
+ * time the reader is still looking at the top of the list.
+ */
 const ECLIPSE_HORIZON_YEARS = 100
-const ECLIPSE_COUNT = 8
+const ECLIPSE_FIRST = 8
+const ECLIPSE_COUNT = 40
 
 const CHART_HEIGHT = 132
 /** Days between samples on the year chart. Sunrise moves smoothly enough. */
@@ -66,9 +75,19 @@ export class Almanac {
   private readonly chartCaption: HTMLElement
   private readonly eclipseList: HTMLElement
   private eclipses: Eclipse[] | null = null
-  private eclipseSpan = { from: 0, to: 0 }
+  private eclipseSpan = { from: 0, count: 0, exhausted: false }
+  private eclipseWanted = ECLIPSE_FIRST
+  private growing = false
+  /** Asked to redraw, when something the panel wanted has finished arriving. */
+  onRefresh: (() => void) | null = null
   /** Told the instant of an eclipse the viewer picked. */
   onJump: ((time: number, place: { lon: number; lat: number } | null) => void) | null = null
+  /**
+   * Turns a point into somewhere a reader has heard of. Coordinates are exact
+   * and useless: nobody knows where 19°S 132°W is, and "off Polynesia" is the
+   * answer they were asking for. Supplied by the app, which holds the gazetteer.
+   */
+  describePoint: ((lon: number, lat: number) => string | null) | null = null
   private readonly ctx: CanvasRenderingContext2D
   private dpr = 1
   private lastKey = ''
@@ -205,21 +224,48 @@ export class Almanac {
    * The eclipses to come.
    *
    * The search is over the geometry rather than a table, so the horizon is a
-   * choice rather than a limit: a century is a second of work, and the list is
-   * built once and kept until the clock leaves the span it covers. Picking one
-   * takes the map to the instant of greatest eclipse, where the shadow itself
-   * is drawn on the ground.
+   * choice rather than a limit. It is not free, though — forty of them is a
+   * third of a second of arithmetic — so the list is kept for as long as it is
+   * still describing the future: a run built today is good for years of
+   * scrubbing forward, and is only rebuilt when the clock walks back behind it
+   * or eats through most of what it holds. Picking one takes the map to the
+   * instant of greatest eclipse, where the shadow itself is drawn on the ground.
    */
   private fillEclipses(time: number): void {
-    const from = time
-    const to = time + ECLIPSE_HORIZON_YEARS * 365.25 * MS_PER_DAY
-    if (!this.eclipses || time < this.eclipseSpan.from || time > this.eclipseSpan.to) {
-      this.eclipses = nextEclipses(from, ECLIPSE_COUNT, ECLIPSE_HORIZON_YEARS, worthSeeing)
-      // Good until the clock passes the second of them, at which point the list
-      // is stale by one and worth rebuilding.
-      this.eclipseSpan = { from, to: this.eclipses[1]?.time ?? to }
+    const ahead = this.eclipses?.filter((e) => e.time >= time) ?? []
+    const usable =
+      this.eclipses !== null &&
+      time >= this.eclipseSpan.from &&
+      this.eclipseSpan.count >= this.eclipseWanted &&
+      // The run shortens as the clock eats into it, and is only rebuilt once
+      // there is barely a panel's worth left — so scrubbing through years of
+      // eclipses costs one search, not one per eclipse.
+      (ahead.length >= ECLIPSE_FIRST || this.eclipseSpan.exhausted)
+    if (!usable) {
+      const found = nextEclipses(time, this.eclipseWanted, ECLIPSE_HORIZON_YEARS, worthSeeing)
+      this.eclipses = found
+      this.eclipseSpan = {
+        from: time,
+        count: this.eclipseWanted,
+        // The horizon itself can run out before the count does, near the far
+        // end of it; asking again would only find the same short list.
+        exhausted: found.length < this.eclipseWanted,
+      }
     }
-    const upcoming = this.eclipses.filter((e) => e.time >= time).slice(0, ECLIPSE_COUNT)
+    const upcoming = (this.eclipses ?? []).filter((e) => e.time >= time).slice(0, this.eclipseWanted)
+
+    // The long list is fetched once the short one is on screen. A timeout
+    // rather than an idle callback because Safari has never had one.
+    if (this.eclipseWanted < ECLIPSE_COUNT && !this.growing) {
+      this.growing = true
+      setTimeout(() => {
+        this.eclipseWanted = ECLIPSE_COUNT
+        this.growing = false
+        // The panel is memoised by the minute, so it must be told to look again.
+        this.lastKey = ''
+        this.onRefresh?.()
+      }, 300)
+    }
 
     this.eclipseList.textContent = ''
     for (const eclipse of upcoming) {
@@ -236,10 +282,12 @@ export class Almanac {
       kind.textContent = describeEclipse(eclipse)
       const detail = document.createElement('span')
       detail.className = 'numeric almanac-eclipse-detail'
-      detail.textContent =
-        eclipse.kind === 'solar' && eclipse.greatest
-          ? `${formatLatitude(eclipse.greatest.lat)} ${formatLongitude(eclipse.greatest.lon)}`
-          : `mag ${Math.max(0, eclipse.magnitude).toFixed(2)}`
+      const greatest = eclipse.kind === 'solar' ? eclipse.greatest : null
+      const near = greatest ? this.describePoint?.(greatest.lon, greatest.lat) : null
+      if (near) detail.classList.remove('numeric')
+      detail.textContent = greatest
+        ? (near ?? `${formatLatitude(greatest.lat)} ${formatLongitude(greatest.lon)}`)
+        : `mag ${Math.max(0, eclipse.magnitude).toFixed(2)}`
       button.append(date, kind, detail)
       button.addEventListener('click', () => {
         this.onJump?.(eclipse.time, eclipse.kind === 'solar' ? eclipse.greatest : null)

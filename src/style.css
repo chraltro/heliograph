@@ -297,15 +297,22 @@ select:hover {
 .stage {
   position: relative;
   min-height: 0;
-  touch-action: none;
 }
 
+/*
+ * Only the canvases refuse the browser's own panning, because only they are
+ * dragged. Putting this on the stage instead disabled panning for everything
+ * inside it, panels included: touch-action is decided across the whole ancestor
+ * chain, so a scrollable panel inside a stage that says "none" cannot scroll,
+ * however much it asks to.
+ */
 .map,
 .overlay {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  touch-action: none;
 }
 
 .overlay {
@@ -1582,4 +1589,94 @@ select:hover {
 .panel-close:hover {
   color: var(--ink-800);
   background: var(--ink-100);
+}
+
+
+/* ----------------------------------------------------------- a steady rail
+ *
+ * The rail must not change shape because of what it says. WebKit sizes a native
+ * date control to its own rendered text, so the first of the month is narrower
+ * than the fourteenth, and any give in the row turns that into a moving bar:
+ * a label wraps to a second line, the row grows, and the whole thing steps up
+ * and down as the day changes.
+ *
+ * So nothing in it is allowed to reflow. The row is a fixed height, the two
+ * time fields are a fixed width wide enough for any locale's rendering of a
+ * full date, and no label may wrap. Stated at the end of the file because the
+ * phone shell's media query is further up and equal specificity is decided by
+ * source order.
+ */
+.button,
+.segmented button,
+select {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .rail-controls {
+    /* One fixed row. Whatever it holds, the bar is this tall. */
+    height: 38px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .rail-controls > * {
+    flex-shrink: 0;
+  }
+
+  /* The zone name is the one thing allowed to give, and it ellipsises. */
+  .rail select {
+    flex: 0 1 auto;
+    min-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Sized for the widest a date renders in any locale, so the control's own
+     idea of how wide it wants to be never reaches the layout. */
+  .rail [data-date-field] {
+    width: 104px;
+    flex: 0 0 104px;
+    padding-left: 4px;
+    padding-right: 4px;
+    text-align: center;
+    overflow: hidden;
+  }
+
+  .rail [data-time-field] {
+    width: 74px;
+    flex: 0 0 74px;
+    padding-left: 4px;
+    padding-right: 4px;
+    text-align: center;
+    overflow: hidden;
+  }
+
+  .rail .button,
+  .rail select,
+  .rail .field {
+    height: 34px;
+    min-height: 34px;
+  }
+}
+
+
+/* The eclipse list is the long part of the panel, and the panel is the one
+   scroller: nesting a second one inside it makes a phone guess which of them a
+   drag meant, and it guesses wrong about half the time. Place names vary in
+   length, so the two flexible columns are allowed to shorten rather than push
+   the row wider than the panel. */
+.almanac-eclipse button {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+
+.almanac-eclipse-kind,
+.almanac-eclipse-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.almanac-eclipse-detail {
+  text-align: right;
 }
