@@ -100,6 +100,8 @@ export class MapRenderer {
   private readonly counts: { land: number; lake: number; coast: number; border: number; city: number }
   private readonly ramps: Record<SurfaceName, WebGLTexture>
   private readonly groundClear: [number, number, number]
+  private terrain: WebGLTexture
+  private terrainReady = false
 
   private width = 1
   private height = 1
@@ -225,6 +227,15 @@ export class MapRenderer {
       ice: this.createLutTexture('ice'),
     }
 
+    // A neutral single pixel stands in for the albedo texture until it arrives,
+    // so the land pass can bind something on the very first frame.
+    const placeholder = gl.createTexture()
+    if (!placeholder) throw new Error('could not create the terrain texture')
+    gl.bindTexture(gl.TEXTURE_2D, placeholder)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]))
+    gl.bindTexture(gl.TEXTURE_2D, null)
+    this.terrain = placeholder
+
     // Clearing to the exact ground colour means the surround, the letterbox and
     // the CSS behind the canvas are all literally the same value.
     const groundLinear = hexToLinearRgb(INK[0])
@@ -257,6 +268,28 @@ export class MapRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     gl.bindTexture(gl.TEXTURE_2D, null)
     return texture
+  }
+
+  /**
+   * Install the real land albedo once it has decoded. Stored as sRGB so the
+   * sampler hands the shader linear light, wrapped horizontally because
+   * longitude does, mipmapped because the map zooms across a factor of twelve.
+   */
+  setTerrain(source: TexImageSource): void {
+    const gl = this.gl
+    const texture = gl.createTexture()
+    if (!texture) throw new Error('could not create the terrain texture')
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, source)
+    gl.generateMipmap(gl.TEXTURE_2D)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.bindTexture(gl.TEXTURE_2D, null)
+    gl.deleteTexture(this.terrain)
+    this.terrain = texture
+    this.terrainReady = true
   }
 
   /** Size in device pixels. Rebuilds every render target. */
@@ -420,6 +453,11 @@ export class MapRenderer {
     gl.bindVertexArray(this.land.vao)
     this.setRamps(this.land.uniforms, t, 'land', 'ice')
     this.land.uniforms.f1('uIceAmount', t.iceAmount)
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D, this.terrain)
+    gl.activeTexture(gl.TEXTURE0)
+    this.land.uniforms.i1('uTerrain', 2)
+    this.land.uniforms.f1('uTerrainAmount', this.terrainReady ? 1 : 0)
     for (const offset of copies) {
       this.setView(this.land.uniforms, frame, dpr, offset)
       gl.drawElements(gl.TRIANGLES, this.counts.land, gl.UNSIGNED_INT, 0)
@@ -581,5 +619,6 @@ export class MapRenderer {
   dispose(): void {
     this.releaseTargets()
     for (const texture of Object.values(this.ramps)) this.gl.deleteTexture(texture)
+    this.gl.deleteTexture(this.terrain)
   }
 }

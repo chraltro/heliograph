@@ -23,14 +23,16 @@ straight to blue, and why every surface converges on the same grey-blue within a
 couple of degrees of the terminator: down there the atmosphere is most of what
 you can see.
 
-The land is not one colour. A procedural climate sits on top of the land ramp:
-the rainforest belt, the subtropical deserts, the boreal forest and the tundra,
-bent and broken by noise so no zone follows a ruled parallel, and a seasonal
-snow cap that follows the solar declination down into the mid latitudes of the
-winter hemisphere and back toward the pole in summer. Greenland and Antarctica
-keep their permanent ice. It is climate as a function of latitude and season,
-not a map of weather, but it is why Siberia whitens in January and why the
-Sahara does not look like the Congo.
+The land is real. Under the illumination sits the actual albedo of the actual
+planet, resampled from Natural Earth's cross-blended hypsometric relief raster
+at build time, which is why the Sahara is sand, the Amazon is dark forest, the
+Tibetan plateau is high and pale, and the Greenland and Antarctic ice read as
+ice: bright, colourless pixels in the data are shaded on the ice ramp, so real
+snowfields go pink at sunset like snow and not like rock. On top of that the
+map knows the season, from nothing but the solar declination it already tracks:
+a ragged snow line follows the Sun into the mid latitudes of the winter
+hemisphere and retreats in summer, and mid latitude vegetation browns as its
+winter approaches. Scrub the year and watch Siberia whiten in January.
 
 Over that continuous gradient sit four hairlines, at solar elevations of
 -0.833, -6, -12 and -18 degrees: sunrise and sunset, then the ends of civil,
@@ -153,6 +155,7 @@ build, and the browser tests.
 | `npm test` | Unit tests |
 | `npm run e2e` | Browser tests |
 | `npm run data` | Rebuild the map data from Natural Earth |
+| `npm run terrain` | Rebuild the land albedo texture from Natural Earth |
 | `npm run fonts` | Re-subset and re-embed the typefaces |
 | `npm run deploy` | Build and publish to GitHub Pages |
 

@@ -6,6 +6,7 @@
   "description": "A world map of sunlight: where the sun falls on Earth at any date and time.",
   "scripts": {
     "data": "node scripts/build-data.mjs",
+    "terrain": "node scripts/build-terrain.mjs",
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
@@ -25,6 +26,7 @@
     "@types/node": "^22.10.0",
     "earcut": "^3.0.0",
     "mapshaper": "^0.6.102",
+    "sharp": "^0.35.3",
     "subset-font": "^2.5.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.0",
