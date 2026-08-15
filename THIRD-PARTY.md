@@ -308,6 +308,11 @@ Coastlines, lakes, national boundaries, populated places and time zone
 polygons come from Natural Earth (https://www.naturalearthdata.com), which is
 in the public domain. See scripts/build-data.mjs for the exact layers used.
 
-The land albedo texture is resampled from Natural Earth's Cross-blended
-Hypsometric Tints with Shaded Relief and Water raster (HYP_50M_SR_W), also in
-the public domain. See scripts/build-terrain.mjs for the processing.
+## Imagery
+
+The land is NASA's Blue Marble Next Generation, the June and December 2004
+composites, produced by Reto Stockli at the NASA Earth Observatory from MODIS
+surface reflectance. NASA imagery is in the public domain. See
+scripts/build-terrain.mjs for the processing, and for the mirrors the build
+fetches from: NASA's own archive has no stable direct link, so the standard
+published 5400x2700 composites are pulled from copies hosted on GitHub.

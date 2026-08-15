@@ -188,66 +188,74 @@ export const LAND_FS =
   SHADING +
   /* glsl */ `
 uniform float uIceAmount;
-uniform sampler2D uTerrain;    // real land albedo, decoded to linear by the sRGB sampler
-uniform float uTerrainAmount;  // 0 until the texture has arrived
+uniform sampler2D uTerrain;    // June albedo, decoded to linear by the sRGB sampler
+uniform sampler2D uSeason;     // December over June, a linear gain, not a colour
+uniform float uTerrainAmount;  // 0 until the textures have arrived
 in vec2 vLonLat;
 out vec4 fragColor;
 
-// The mean land pixel of the albedo texture in linear light, printed by
-// scripts/build-terrain.mjs. Dividing by it turns the texture into a relative
-// albedo over the spectral land ramp, so the ramp still owns the illumination.
-const vec3 TERRAIN_MEAN = vec3(0.5148, 0.5774, 0.5932);
+/**
+ * The median land pixel, ice excluded, in linear light, printed by
+ * scripts/build-terrain.mjs. This is the "typical land" the spectral ramp was
+ * built to describe, so imagery at this value comes out as exactly the ramp
+ * colour and everything else is read as a departure from it.
+ */
+const vec3 TERRAIN_REF = vec3(0.0497, 0.0513, 0.0160);
+/** The season texture holds ratio / 4, so a gain above one survives 8 bits. */
+const float RATIO_SCALE = 4.0;
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+/**
+ * Orbit sees a far wider range than a map can print: dark boreal forest and
+ * bright desert are a factor of thirty apart, and mapped straight through, one
+ * would be black and the other would clip. Brightness is therefore compressed
+ * about the typical land value, and the colour is carried separately so that
+ * flattening the range does not also drain the hue out of the Sahara.
+ */
+const float TERRAIN_CONTRAST = 0.36;
+const float TERRAIN_CHROMA = 0.72;
 
 void main() {
   float elevation = solarElevation(vLonLat);
   float lat = vLonLat.y;
+  vec2 uv = vec2((vLonLat.x + 180.0) / 360.0, (90.0 - lat) / 180.0);
 
-  // Fine grain to suggest relief; quieter once the real relief has loaded.
+  // Fine grain to suggest relief; quieter once the real imagery has loaded.
   float grain = periodicNoise(vLonLat * 0.5, 180.0) * 0.56
               + periodicNoise(vLonLat * 2.0, 720.0) * 0.30
               + periodicNoise(vLonLat * 7.0, 2520.0) * 0.14;
-  grain = mix(grain, 0.5 + (grain - 0.5) * 0.45, uTerrainAmount);
+  grain = mix(grain, 0.5 + (grain - 0.5) * 0.35, uTerrainAmount);
 
-  // The land as it actually is: Natural Earth's cross-blended relief raster.
-  vec3 texel = texture(uTerrain, vec2((vLonLat.x + 180.0) / 360.0, (90.0 - lat) / 180.0)).rgb;
-  vec3 rel = clamp(texel / TERRAIN_MEAN, 0.0, 2.4);
+  // The land as it actually was, photographed from orbit: Blue Marble's June
+  // composite, carried into December by the measured ratio between the two
+  // solstice months. The Sun's own declination says how far through that
+  // journey we are, so the map needs no calendar to know the season: green
+  // Siberia whitens, the Sahel dries, Patagonia's snow comes and goes, all of
+  // it measured rather than invented. One texture holds every detail; the
+  // other is a smooth gain, which is why the change costs almost no memory.
+  float season = clamp(0.5 - uSun.x / 46.88, 0.0, 1.0);
+  vec3 seasonGain = texture(uSeason, uv).rgb * RATIO_SCALE;
+  vec3 texel = texture(uTerrain, uv).rgb * mix(vec3(1.0), seasonGain, season);
 
-  // Snow and ice fields identify themselves in the data: bright and colourless.
-  float lum = dot(texel, vec3(0.2126, 0.7152, 0.0722));
+  // Brightness relative to typical land, compressed; colour relative to typical
+  // land, kept. Their product is the albedo the ramp is then shaded through.
+  float refLum = dot(TERRAIN_REF, LUMA);
+  float lum = max(dot(texel, LUMA), 1e-5);
+  float gain = pow(lum / refLum, TERRAIN_CONTRAST);
+  vec3 chroma = (texel / lum) / (TERRAIN_REF / refLum);
+  vec3 rel = clamp(gain * mix(vec3(1.0), chroma, TERRAIN_CHROMA), 0.0, 2.6);
+
+  // Snow and ice identify themselves in the imagery: bright and colourless.
+  // Because this reads the blended texel, the ice ramp follows the real snow
+  // as it advances and retreats, and snow goes pink at sunset like snow.
   float peak = max(texel.r, max(texel.g, texel.b));
   float sat = (peak - min(texel.r, min(texel.g, texel.b))) / max(peak, 1e-4);
-  float frost = smoothstep(0.5, 0.75, lum) * (1.0 - smoothstep(0.12, 0.3, sat)) * uTerrainAmount;
-
-  // The season, from the Sun itself. The snow line follows the declination
-  // into the mid latitudes of the winter hemisphere and lets go in summer,
-  // its edge ragged with noise so it never draws a ruled parallel. The x
-  // noise scales keep 360 times the scale an integer, or the pattern would
-  // seam at the antimeridian.
-  float wobble = periodicNoise(vLonLat * vec2(0.05, 0.09), 18.0) - 0.5;
-  float ragged = (periodicNoise(vLonLat * vec2(0.5, 0.7), 180.0) - 0.5) * 5.0 + wobble * 6.0;
-  float snowLineN = 64.0 + uSun.x * 0.85;
-  float snowLineS = 64.0 - uSun.x * 0.85;
-  float patchiness = 0.6 + 0.4 * periodicNoise(vLonLat * vec2(0.125, 0.15) + vec2(31.7, 11.3), 45.0);
-  float seasonal = max(
-    smoothstep(snowLineN - 3.0, snowLineN + 9.0, lat + ragged),
-    smoothstep(snowLineS - 3.0, snowLineS + 9.0, -lat + ragged)
-  ) * patchiness;
-
-  // Vegetation browns as its hemisphere turns to winter, before snow arrives.
-  float veg = smoothstep(0.02, 0.12, texel.g - texel.r);
-  float winter = clamp(-sign(lat) * uSun.x / 23.44, 0.0, 1.0) * smoothstep(24.0, 42.0, abs(lat));
-  rel *= mix(vec3(1.0), vec3(1.04, 0.80, 0.58), veg * winter * 0.55);
+  float ice = smoothstep(0.34, 0.62, lum) * (1.0 - smoothstep(0.1, 0.26, sat)) * uTerrainAmount * uIceAmount;
 
   // Albedo is a daylight fact. Within a few degrees of the terminator the
-  // atmosphere is most of what you can see, so the texture lets go there and
+  // atmosphere is most of what you can see, so the imagery lets go there and
   // every surface converges on the ramp's own twilight colour.
   float lit = smoothstep(-4.0, 8.0, elevation);
   vec3 albedo = mix(vec3(1.0), rel, lit * uTerrainAmount);
-
-  // Ice and snow get their own ramp because high albedo surfaces keep catching
-  // the reddened beam right up to the terminator, which is why snow goes pink
-  // at sunset and water does not.
-  float ice = min(1.0, max(frost, seasonal)) * uIceAmount;
 
   vec3 base = mix(surfaceColour(uRampA, elevation) * albedo, surfaceColour(uRampB, elevation), ice);
 
@@ -334,6 +342,7 @@ uniform float uFeather;
 uniform vec3 uDayTint;
 uniform vec3 uNightTint;
 uniform float uIntensity;
+uniform float uDayFade;
 
 in vec2 vPx;
 in vec2 vA;
@@ -347,11 +356,13 @@ void main() {
   if (alpha <= 0.002) discard;
 
   float elevation = solarElevation(vLonLat);
-  // Lit shores catch a warm rim; dark shores keep a cold one, so the outline of
-  // the world never disappears entirely into the night side.
   float lit = smoothstep(-8.0, 6.0, elevation);
+  // In daylight the land draws its own coast: the shore is where the terrain
+  // stops, and an outline over it only makes the map look like a printed
+  // atlas. So the stroke fades out as the light comes up, and stays on the
+  // night side, where without it the outline of the world would be lost.
   vec3 tint = mix(uNightTint, uDayTint, lit);
-  float a = alpha * uIntensity;
+  float a = alpha * uIntensity * mix(1.0, uDayFade, lit);
   fragColor = vec4(tint * a, a);
 }
 `

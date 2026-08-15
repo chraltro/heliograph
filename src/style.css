@@ -80,7 +80,11 @@ body {
   font-size: 12px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  /* An instrument, not a document: nothing on it selects, balloons or zooms. */
+  /* An instrument, not a document: nothing on it selects, balloons or zooms.
+     The size adjust is load bearing on iOS, which otherwise inflates the type
+     inside wide blocks on its own initiative and bursts the console apart. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
@@ -1047,9 +1051,35 @@ select:hover {
     -webkit-backdrop-filter: blur(24px) saturate(0.8);
     max-height: calc(100vh - 84px);
     max-height: calc(100dvh - 84px);
+    /* Never sideways. The sheet is exactly as wide as the screen, and anything
+       that will not fit shrinks rather than pushing the rest off the edge. */
+    overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
     transform: translate3d(0, var(--sheet-shift, 0px), 0);
+  }
+
+  /* Every cell may shrink below its content, or one wide control would set the
+     width of the whole sheet and clip the clock off the left of the screen. */
+  .console > *,
+  .console-grid > *,
+  .transport > * {
+    min-width: 0;
+  }
+
+  /* The two segmented groups share one row and give up padding before width. */
+  [data-modes],
+  [data-rates] {
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  [data-modes] button,
+  [data-rates] button {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: clip;
   }
 
   .console.sheet-ready {

@@ -27,6 +27,7 @@ import {
 } from '../solar/solar.ts'
 import { isValidZone, listZones, localZone, wallClockToUtc, zoneOffsetMinutes } from '../time/timezone.ts'
 import terrainUrl from '../assets/terrain.webp'
+import terrainSeasonUrl from '../assets/terrain-season.webp'
 import {
   formatAzimuth,
   formatClock,
@@ -954,17 +955,19 @@ export class Heliograph {
   }
 
   /**
-   * The real land albedo, decoded off the critical path. The first frame draws
-   * from the spectral ramp alone; the terrain fades in the moment it arrives.
+   * The satellite imagery, decoded off the critical path. The first frame draws
+   * from the spectral ramp alone; the land arrives the moment it is ready.
    */
   private loadTerrain(): void {
-    const image = new Image()
-    image.decoding = 'async'
-    image.src = terrainUrl
-    image
-      .decode()
-      .then(() => {
-        this.renderer.setTerrain(image)
+    const fetchImage = (url: string) => {
+      const image = new Image()
+      image.decoding = 'async'
+      image.src = url
+      return image.decode().then(() => image)
+    }
+    Promise.all([fetchImage(terrainUrl), fetchImage(terrainSeasonUrl)])
+      .then(([albedo, season]) => {
+        this.renderer.setTerrain(albedo, season)
         this.markDirty()
       })
       .catch(() => undefined)
@@ -1194,7 +1197,7 @@ export class Heliograph {
   private resize(): void {
     const rect = this.stage.getBoundingClientRect()
     this.size = { width: Math.max(1, rect.width), height: Math.max(1, rect.height) }
-    this.dpr = Math.min(2, window.devicePixelRatio || 1)
+    this.dpr = this.pixelRatio()
     this.mapCanvas.style.width = `${this.size.width}px`
     this.mapCanvas.style.height = `${this.size.height}px`
     this.overlayCanvas.style.width = `${this.size.width}px`
@@ -1209,6 +1212,23 @@ export class Heliograph {
     }
     this.syncSheet()
     this.markDirty()
+  }
+
+  /**
+   * How many device pixels to draw per CSS pixel.
+   *
+   * A phone is a three times display, and drawing it at two and letting the
+   * browser scale up is exactly what makes a hairline coastline read as a fuzzy
+   * band and the terrain read as mush. So the ratio is honoured up to three,
+   * bounded by a total pixel budget rather than a flat cap: a phone is a small
+   * viewport and can afford every pixel it has, while a large retina desktop
+   * would be asking for four times the fill for the same picture.
+   */
+  private pixelRatio(): number {
+    const requested = window.devicePixelRatio || 1
+    const area = Math.max(1, this.size.width * this.size.height)
+    const BUDGET = 6_500_000
+    return Math.max(1, Math.min(requested, 3, Math.sqrt(BUDGET / area)))
   }
 
   /**

@@ -20,6 +20,8 @@ export interface Tuning {
   citySizeMax: number
   coastWidth: number
   coastIntensity: number
+  /** How much of the coastline survives in full daylight. */
+  coastDayFade: number
   borderWidth: number
   borderIntensity: number
   sunspotSize: number
@@ -41,8 +43,9 @@ export const DEFAULT_TUNING: Tuning = {
   cityIntensity: 0.72,
   citySizeMin: 2.0,
   citySizeMax: 13,
-  coastWidth: 1.1,
-  coastIntensity: 0.55,
+  coastWidth: 0.9,
+  coastIntensity: 0.5,
+  coastDayFade: 0.16,
   borderWidth: 0.85,
   borderIntensity: 0.28,
   sunspotSize: 14,
@@ -101,6 +104,7 @@ export class MapRenderer {
   private readonly ramps: Record<SurfaceName, WebGLTexture>
   private readonly groundClear: [number, number, number]
   private terrain: WebGLTexture
+  private season: WebGLTexture
   private terrainReady = false
 
   private width = 1
@@ -227,14 +231,11 @@ export class MapRenderer {
       ice: this.createLutTexture('ice'),
     }
 
-    // A neutral single pixel stands in for the albedo texture until it arrives,
-    // so the land pass can bind something on the very first frame.
-    const placeholder = gl.createTexture()
-    if (!placeholder) throw new Error('could not create the terrain texture')
-    gl.bindTexture(gl.TEXTURE_2D, placeholder)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]))
-    gl.bindTexture(gl.TEXTURE_2D, null)
-    this.terrain = placeholder
+    // Single pixels stand in until the real imagery arrives, so the land pass
+    // can bind something on the very first frame. The season placeholder is a
+    // gain of one, encoded against the shader's scale of four.
+    this.terrain = this.createPixel([128, 128, 128, 255])
+    this.season = this.createPixel([64, 64, 64, 255])
 
     // Clearing to the exact ground colour means the surround, the letterbox and
     // the CSS behind the canvas are all literally the same value.
@@ -270,25 +271,46 @@ export class MapRenderer {
     return texture
   }
 
-  /**
-   * Install the real land albedo once it has decoded. Stored as sRGB so the
-   * sampler hands the shader linear light, wrapped horizontally because
-   * longitude does, mipmapped because the map zooms across a factor of twelve.
-   */
-  setTerrain(source: TexImageSource): void {
+  private createPixel(rgba: [number, number, number, number]): WebGLTexture {
     const gl = this.gl
     const texture = gl.createTexture()
-    if (!texture) throw new Error('could not create the terrain texture')
+    if (!texture) throw new Error('could not create a placeholder texture')
     gl.bindTexture(gl.TEXTURE_2D, texture)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, source)
-    gl.generateMipmap(gl.TEXTURE_2D)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(rgba))
     gl.bindTexture(gl.TEXTURE_2D, null)
+    return texture
+  }
+
+  /**
+   * Install the imagery once it has decoded.
+   *
+   * The albedo is stored as sRGB so the sampler hands the shader linear light.
+   * The seasonal field is a gain rather than a colour, so it is stored plainly
+   * and must not go through the transfer function. Both wrap horizontally
+   * because longitude does, and both are mipmapped because the map zooms
+   * across a factor of twelve.
+   */
+  setTerrain(albedo: TexImageSource, season: TexImageSource): void {
+    const gl = this.gl
+    const upload = (source: TexImageSource, srgb: boolean): WebGLTexture => {
+      const texture = gl.createTexture()
+      if (!texture) throw new Error('could not create the terrain texture')
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      gl.texImage2D(gl.TEXTURE_2D, 0, srgb ? gl.SRGB8_ALPHA8 : gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source)
+      gl.generateMipmap(gl.TEXTURE_2D)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.bindTexture(gl.TEXTURE_2D, null)
+      return texture
+    }
+    const nextTerrain = upload(albedo, true)
+    const nextSeason = upload(season, false)
     gl.deleteTexture(this.terrain)
-    this.terrain = texture
+    gl.deleteTexture(this.season)
+    this.terrain = nextTerrain
+    this.season = nextSeason
     this.terrainReady = true
   }
 
@@ -455,8 +477,11 @@ export class MapRenderer {
     this.land.uniforms.f1('uIceAmount', t.iceAmount)
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, this.terrain)
+    gl.activeTexture(gl.TEXTURE3)
+    gl.bindTexture(gl.TEXTURE_2D, this.season)
     gl.activeTexture(gl.TEXTURE0)
     this.land.uniforms.i1('uTerrain', 2)
+    this.land.uniforms.i1('uSeason', 3)
     this.land.uniforms.f1('uTerrainAmount', this.terrainReady ? 1 : 0)
     for (const offset of copies) {
       this.setView(this.land.uniforms, frame, dpr, offset)
@@ -501,6 +526,7 @@ export class MapRenderer {
       u.f3('uDayTint', ...LIGHT.coastDay)
       u.f3('uNightTint', ...LIGHT.coastNight)
       u.f1('uIntensity', t.coastIntensity)
+      u.f1('uDayFade', t.coastDayFade)
       for (const offset of copies) {
         this.setView(u, frame, dpr, offset)
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.counts.coast)
@@ -620,5 +646,6 @@ export class MapRenderer {
     this.releaseTargets()
     for (const texture of Object.values(this.ramps)) this.gl.deleteTexture(texture)
     this.gl.deleteTexture(this.terrain)
+    this.gl.deleteTexture(this.season)
   }
 }

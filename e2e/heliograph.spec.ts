@@ -375,6 +375,54 @@ test.describe('on a phone', () => {
       .toBeGreaterThan(before * 1.15)
   })
 
+  /**
+   * iOS inflates the type inside wide blocks on its own initiative unless it is
+   * told not to, which burst the console sideways off the screen. The stylesheet
+   * now refuses the inflation and the sheet clips rather than scrolls, so this
+   * asserts the sheet holds even when every size in it is inflated anyway.
+   */
+  test('the console stays inside the screen, even with the type inflated', async () => {
+    const measure = () =>
+      phone.evaluate(() => {
+        const sheet = document.querySelector('.console')!
+        const escaped = ['[data-date]', '[data-time]', '[data-zone]', '[data-play]', '[data-modes]']
+          .map((selector) => document.querySelector(selector)!.getBoundingClientRect())
+          .filter((box) => box.left < -0.5 || box.right > window.innerWidth + 0.5).length
+        return { overflow: sheet.scrollWidth - sheet.clientWidth, escaped }
+      })
+
+    expect(await measure()).toEqual({ overflow: 0, escaped: 0 })
+
+    // Sizes are read first and applied second, the way the platform does it, so
+    // that nesting does not multiply the inflation out of all recognition.
+    await phone.evaluate(() => {
+      const els = [...document.querySelectorAll<HTMLElement>('.console, .console *')]
+      const sizes = els.map((el) => Number.parseFloat(getComputedStyle(el).fontSize))
+      els.forEach((el, i) => {
+        el.dataset.inflated = '1'
+        el.style.fontSize = `${sizes[i]! * 1.75}px`
+      })
+    })
+    const inflated = await measure()
+    await phone.evaluate(() => {
+      for (const el of document.querySelectorAll<HTMLElement>('[data-inflated]')) {
+        el.style.fontSize = ''
+        delete el.dataset.inflated
+      }
+    })
+    expect(inflated.overflow).toBeLessThanOrEqual(1)
+    expect(inflated.escaped).toBe(0)
+  })
+
+  /** A three times display gets three times the pixels, or it looks like mush. */
+  test('the map is drawn at the density of the screen', async () => {
+    const density = await phone.evaluate(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>('.map')!
+      return canvas.width / canvas.clientWidth
+    })
+    expect(density).toBeCloseTo(3, 1)
+  })
+
   test('the touch targets are big enough to hit', async () => {
     const sizes = await phone.evaluate(() =>
       ['[data-play]', '[data-step="1"]', '[data-mode="day"]'].map((selector) => {

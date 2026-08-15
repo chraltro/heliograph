@@ -23,16 +23,30 @@ straight to blue, and why every surface converges on the same grey-blue within a
 couple of degrees of the terminator: down there the atmosphere is most of what
 you can see.
 
-The land is real. Under the illumination sits the actual albedo of the actual
-planet, resampled from Natural Earth's cross-blended hypsometric relief raster
-at build time, which is why the Sahara is sand, the Amazon is dark forest, the
-Tibetan plateau is high and pale, and the Greenland and Antarctic ice read as
-ice: bright, colourless pixels in the data are shaded on the ice ramp, so real
-snowfields go pink at sunset like snow and not like rock. On top of that the
-map knows the season, from nothing but the solar declination it already tracks:
-a ragged snow line follows the Sun into the mid latitudes of the winter
-hemisphere and retreats in summer, and mid latitude vegetation browns as its
-winter approaches. Scrub the year and watch Siberia whiten in January.
+The land is a photograph. Under the illumination sits NASA's Blue Marble Next
+Generation: a cloud free monthly composite of MODIS surface reflectance, which
+is to say what the ground actually looked like from orbit. That is why the
+Sahara is sand rather than a shade meaning "high", why the Amazon and the Congo
+are dark forest, and why the Nile is a green thread through a brown desert.
+Nothing here is an elevation tint.
+
+The map also knows the season, and knows it from measurement rather than
+invention. Two composites are compiled in, the two solstice months, because
+between them they carry the whole seasonal swing in both hemispheres at once:
+June has a green Siberia and a snowed-in Patagonia, December has the reverse.
+The renderer holds June at full resolution and December as the ratio between
+them, a smooth low frequency gain, and slides between the two on the Sun's own
+declination. So the map needs no calendar: scrub the year and the boreal forest
+greens and browns, the snow line walks down into the mid latitudes and back,
+and the Sahel dries, all of it as photographed. Bright colourless ground is
+recognised as snow and shaded on the ice ramp, so real snowfields go pink at
+sunset like snow and not like rock.
+
+Because a lens sees a far wider range than a map can print, the brightness is
+compressed about the typical land value while the colour is carried through
+intact: dark boreal forest and bright desert are a factor of thirty apart in
+the data, and passed straight through, one would be black and the other would
+clip.
 
 Over that continuous gradient sit four hairlines, at solar elevations of
 -0.833, -6, -12 and -18 degrees: sunrise and sunset, then the ends of civil,
@@ -155,7 +169,7 @@ build, and the browser tests.
 | `npm test` | Unit tests |
 | `npm run e2e` | Browser tests |
 | `npm run data` | Rebuild the map data from Natural Earth |
-| `npm run terrain` | Rebuild the land albedo texture from Natural Earth |
+| `npm run terrain` | Rebuild the land imagery from NASA Blue Marble |
 | `npm run fonts` | Re-subset and re-embed the typefaces |
 | `npm run deploy` | Build and publish to GitHub Pages |
 
@@ -189,6 +203,8 @@ grow so that zooming in does not brighten a continent.
 ## Credits
 
 Cartography from [Natural Earth](https://www.naturalearthdata.com), which is in
-the public domain. Type is Bodoni Moda, Archivo and Martian Mono, all under the
-SIL Open Font License; see `THIRD-PARTY.md`. The colour and accuracy work rests
-on the sources catalogued in `docs/research/`.
+the public domain. Land imagery from NASA's
+[Blue Marble Next Generation](https://earthobservatory.nasa.gov/features/BlueMarble),
+by Reto Stockli at the NASA Earth Observatory. Type is Bodoni Moda, Archivo and
+Martian Mono, all under the SIL Open Font License; see `THIRD-PARTY.md`. The
+colour and accuracy work rests on the sources catalogued in `docs/research/`.
