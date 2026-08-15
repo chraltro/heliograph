@@ -19,13 +19,18 @@ import {
 import {
   analemma,
   dayEvents,
+  elevationAt,
+  HORIZON,
   localSolar,
   MS_PER_DAY,
   MS_PER_HOUR,
   MS_PER_MINUTE,
+  seasonInstant,
   solarState,
   type SolarState,
 } from '../solar/solar.ts'
+import { moonlight, moonPhase, moonState, type MoonPhase, type MoonState } from '../solar/moon.ts'
+import { shadowUniforms } from '../solar/eclipse.ts'
 import { isValidZone, listZones, localZone, wallClockToUtc, zoneOffsetMinutes } from '../time/timezone.ts'
 import terrainUrl from '../assets/terrain.webp'
 import terrainSeasonUrl from '../assets/terrain-season.webp'
@@ -45,6 +50,10 @@ import {
   type Reading,
 } from './format.ts'
 import { Scrubber } from './scrubber.ts'
+import { Almanac } from './almanac.ts'
+import { PlaceSearch, type SearchResult } from './search.ts'
+import { loadPreferences, samePlace, savePreferences, type Preferences } from './prefs.ts'
+import { composeImage, shareOrDownload } from './export.ts'
 
 /** Wall clock milliseconds for one full sweep at rate 1. */
 const DAY_SWEEP = 20_000
@@ -76,16 +85,28 @@ const TEMPLATE = /* html */ `
   </div>
 
   <div class="rail-readout rail-readout-wide">
-    <span class="micro">Equation of time</span>
-    <span class="numeric" data-sunlit>—</span>
+    <span class="micro">People in daylight</span>
+    <span class="numeric" data-daylit>—</span>
+  </div>
+
+  <div class="rail-readout rail-readout-wide">
+    <span class="micro" data-season-label>Next solstice</span>
+    <span class="numeric" data-season>—</span>
   </div>
 
   <div class="rail-controls">
+    <button type="button" class="button button-icon" data-search-toggle aria-label="Find a place" title="Find a place (press /)">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M10.4 10.4 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
     <label class="micro" for="basis">Clock</label>
     <select id="basis" data-basis></select>
     <input class="field" type="date" data-date-field aria-label="Date" />
     <input class="field" type="time" data-time-field aria-label="Time of day" step="60" />
     <button type="button" class="button" data-now>Now</button>
+    <button type="button" class="button" data-almanac-toggle aria-expanded="false" aria-controls="almanac" title="Almanac (press A)">Almanac</button>
     <button type="button" class="button" data-layers-toggle aria-expanded="false" aria-controls="layers">Layers</button>
   </div>
 </header>
@@ -101,6 +122,11 @@ const TEMPLATE = /* html */ `
       <path d="M10 1v3.2M10 15.8V19M1 10h3.2M15.8 10H19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>
   </button>
+
+  <div class="search" data-search hidden>
+    <input class="search-field" type="search" data-search-field placeholder="Find a place or a time zone" aria-label="Find a place or a time zone" autocomplete="off" spellcheck="false" />
+    <ul class="search-results" data-search-results role="listbox"></ul>
+  </div>
 
   <div class="panel layers" id="layers" data-layers hidden>
     <p class="micro panel-title">Layers</p>
@@ -140,7 +166,15 @@ const TEMPLATE = /* html */ `
 
     <section class="place" aria-live="polite">
       <p class="micro" data-place-label>Under the pointer</p>
-      <p class="place-name" data-place-name>—</p>
+      <p class="place-head">
+        <span class="place-name" data-place-name>—</span>
+        <button type="button" class="icon-button" data-star aria-pressed="false" aria-label="Save this place">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6 9.9 5.7l4.5.5-3.3 3 .9 4.4L8 11.4l-4 2.2.9-4.4-3.3-3 4.5-.5z"/></svg>
+        </button>
+        <button type="button" class="icon-button" data-share aria-label="Save a picture of this view">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 11 5H9v5H7V5H5zM2.5 9.5h2v3h7v-3h2v5h-11z"/></svg>
+        </button>
+      </p>
       <p class="place-coords numeric" data-place-coords>—</p>
       <dl class="facts">
         <div><dt class="micro">Local</dt><dd class="numeric" data-place-clock>—</dd></div>
@@ -171,6 +205,8 @@ const LAYER_FIELDS = [
   { key: 'graticule', label: 'Graticule', group: 'overlay' },
   { key: 'boundaries', label: 'Twilight lines', group: 'overlay' },
   { key: 'analemma', label: 'Analemma', group: 'overlay' },
+  { key: 'moon', label: 'Moonlight', group: 'map' },
+  { key: 'localTime', label: 'Local time everywhere', group: 'special' },
   { key: 'borders', label: 'Borders', group: 'map' },
 ] as const
 
@@ -214,6 +250,13 @@ export class Heliograph {
   private dirty = true
   private tuning: Tuning = { ...DEFAULT_TUNING }
   private analemmaCache: { year: number; hour: number; points: Array<{ lon: number; lat: number }> } | null = null
+  private moonCache: { time: number; state: MoonState; phase: MoonPhase; gain: number } | null = null
+  private daylitCache: { minute: number; value: number } | null = null
+  private zoneOffsetDay = Number.NaN
+  private almanac!: Almanac
+  private search!: PlaceSearch
+  private closeSearch: (() => void) | null = null
+  private readonly prefs: Preferences = loadPreferences()
   private zoneClockCache = new Map<string, { minute: number; text: string }>()
 
   private readonly layers: Record<string, boolean> = {
@@ -224,6 +267,8 @@ export class Heliograph {
     graticule: true,
     boundaries: true,
     analemma: false,
+    moon: true,
+    localTime: false,
     borders: false,
     coast: true,
     lakes: true,
@@ -253,6 +298,15 @@ export class Heliograph {
     this.basis = localZone()
     this.focus = this.defaultSite()
     if (this.reducedMotion) this.mode = 'paused'
+
+    // Stored preferences first, then the URL over the top of them: a link
+    // describes a particular view and must always win over a habit.
+    if (this.prefs.basis && isValidZone(this.prefs.basis)) this.basis = this.prefs.basis
+    if (this.prefs.rate !== null && [0.5, 1, 2, 4].includes(this.prefs.rate)) this.rate = this.prefs.rate
+    if (this.prefs.layers) {
+      const wanted = new Set(this.prefs.layers)
+      for (const field of LAYER_FIELDS) this.layers[field.key] = wanted.has(field.key)
+    }
     this.readUrl(new URLSearchParams(location.search))
 
     this.buildBasisOptions()
@@ -261,6 +315,10 @@ export class Heliograph {
     this.buildLegend()
     this.buildTransport()
     this.buildScrubbers()
+    this.buildSearch()
+    this.buildAlmanac()
+    this.buildSavedPlaces()
+    this.buildShare()
     this.buildSheet()
     this.bindPointer()
     this.bindKeyboard()
@@ -1162,6 +1220,14 @@ export class Heliograph {
         case 'L':
           this.q<HTMLButtonElement>('[data-layers-toggle]').click()
           break
+        case 'a':
+        case 'A':
+          this.q<HTMLButtonElement>('[data-almanac-toggle]').click()
+          break
+        case '/':
+          event.preventDefault()
+          this.q<HTMLButtonElement>('[data-search-toggle]').click()
+          break
         default:
           break
       }
@@ -1367,10 +1433,17 @@ export class Heliograph {
       cities: this.layers.cities ?? true,
       lakes: this.layers.lakes ?? true,
     }
+    const moon = this.moonNow()
     const frame: Frame = {
       view: this.view,
       size: this.size,
       sun,
+      moon:
+        this.layers.moon && moon.gain > 0
+          ? { lon: moon.state.sublunarLon, lat: moon.state.sublunarLat, gain: moon.gain }
+          : null,
+      localTime: this.layers.localTime ? this.localTimeFrame() : null,
+      eclipse: this.eclipseFrame(),
       layers: mapLayers,
       time: 0,
       tuning: this.tuning,
@@ -1397,6 +1470,15 @@ export class Heliograph {
       placeLabels: overlayLayers.places ? this.buildPlaceLabels() : [],
       highlightZones: this.layers.matchClock ? this.matchingZones() : new Set<number>(),
       analemma: overlayLayers.analemma ? this.buildAnalemma() : null,
+      moon: this.layers.moon
+        ? {
+            lon: moon.state.sublunarLon,
+            lat: moon.state.sublunarLat,
+            illumination: moon.phase.illumination,
+            waxing: moon.phase.waxing,
+          }
+        : null,
+      localTime: this.layers.localTime ?? false,
       hover: this.hover,
       pinned: this.focus ? { lon: this.focus.lon, lat: this.focus.lat, label: this.focus.name } : null,
       reveal: this.reveal,
@@ -1449,11 +1531,14 @@ export class Heliograph {
     this.q('[data-subsolar]').textContent =
       `${formatLatitude(sun.subsolarLat)}  ${formatLongitude(sun.subsolarLon)}`
 
-    const eot = sun.equationOfTime
-    const eotMinutes = Math.floor(Math.abs(eot))
-    const eotSeconds = Math.round((Math.abs(eot) - eotMinutes) * 60)
-    this.q('[data-sunlit]').textContent =
-      `${eot < 0 ? '−' : '+'}${eotMinutes}m ${String(eotSeconds).padStart(2, '0')}s`
+    this.q('[data-daylit]').textContent = `${(this.daylitFraction(sun) * 100).toFixed(1)}%`
+
+    const season = this.nextSeason()
+    this.q('[data-season-label]').textContent = season.label
+    const away = season.instant - this.time
+    const days = Math.floor(away / MS_PER_DAY)
+    const hours = Math.floor((away - days * MS_PER_DAY) / MS_PER_HOUR)
+    this.q('[data-season]').textContent = days > 0 ? `${days}d ${hours}h` : `${hours}h`
 
     // The readout follows the pointer, and falls back to the pinned place when
     // the pointer is off the map.
@@ -1483,6 +1568,15 @@ export class Heliograph {
     this.q('[data-place-set]').textContent =
       events.polar ? '—' : formatEventTime(zone, events.sunset)
     this.q('[data-place-daylight]').textContent = formatDuration(events.dayLength)
+
+    if (this.focus) {
+      this.almanac.update(
+        { ...this.focus, zone: this.zones.at(this.focus.lon, this.focus.lat)?.iana ?? 'UTC' },
+        this.time,
+        this.dpr,
+      )
+    }
+    this.syncSavedPlaces()
   }
 
   private zoneClock(index: number): { text: string; sub: string } | null {
@@ -1586,6 +1680,313 @@ export class Heliograph {
    * second so that an animation does not rebuild the curve for changes far
    * below a pixel.
    */
+  // ----------------------------------------------------------------- eclipse
+
+  /**
+   * The shadow, when there is one. Checked every frame because it costs two
+   * positions the map has already computed, and skipped in the shader whenever
+   * the Sun and Moon are more than a couple of degrees apart, which is all but
+   * a few hours a year.
+   */
+  private eclipseFrame(): Frame['eclipse'] {
+    const shadow = shadowUniforms(this.time)
+    if (!shadow.possible) return null
+    const thousand = (v: readonly [number, number, number]) =>
+      [v[0] / 1000, v[1] / 1000, v[2] / 1000] as const
+    return { sun: thousand(shadow.sun), moon: thousand(shadow.moon), gmst: shadow.siderealDegrees }
+  }
+
+  // --------------------------------------------------------------- local time
+
+  /**
+   * What the renderer needs to draw every zone at the same local reading.
+   *
+   * The offsets themselves are rasterised by the renderer and only need
+   * rebuilding when they change, which is at a daylight saving transition; the
+   * key below is deliberately coarse, one entry per day, because that is how
+   * often the answer can differ.
+   */
+  private localTimeFrame(): { referenceOffsetHours: number; declinationRatePerHour: number } {
+    const day = Math.floor(this.time / MS_PER_DAY)
+    if (this.zoneOffsetDay !== day) {
+      this.zoneOffsetDay = day
+      const offsets = new Float64Array(this.world.timezoneMeta.length)
+      for (let i = 0; i < offsets.length; i++) {
+        const meta = this.world.timezoneMeta[i]!
+        // A real zone knows its own daylight saving; the handful that Natural
+        // Earth could not match to IANA fall back to their nominal offset.
+        offsets[i] = meta.iana ? zoneOffsetMinutes(meta.iana, this.time) / 60 : meta.offset
+      }
+      this.renderer.setZoneOffsets(offsets)
+    }
+
+    // The declination drifts by up to a quarter of a degree across the fourteen
+    // hours that separate the extreme zones, so it is measured rather than held.
+    const rate = (solarState(this.time + MS_PER_HOUR).declination - solarState(this.time).declination) / 1
+    return {
+      referenceOffsetHours: zoneOffsetMinutes(this.basis, this.time) / 60,
+      declinationRatePerHour: rate,
+    }
+  }
+
+  // ------------------------------------------------------------------ search
+
+  /**
+   * Find a place without leaving the keyboard. The palette floats over the map
+   * rather than displacing it, because the map is the answer: choosing a result
+   * flies the view there and pins it, and the map behind is already showing the
+   * change as the list narrows.
+   */
+  private buildSearch(): void {
+    this.search = new PlaceSearch(this.world.cities, this.world.namedCount, this.world.timezoneMeta)
+    const panel = this.q('[data-search]')
+    const field = this.q<HTMLInputElement>('[data-search-field]')
+    const list = this.q('[data-search-results]')
+    let active = 0
+    let results: SearchResult[] = []
+
+    const render = () => {
+      list.textContent = ''
+      results.forEach((result, index) => {
+        const item = document.createElement('li')
+        item.className = 'search-result'
+        item.setAttribute('role', 'option')
+        item.setAttribute('aria-selected', String(index === active))
+        if (index === active) item.classList.add('is-active')
+        const label = document.createElement('span')
+        label.className = 'search-label'
+        label.textContent = result.label
+        const detail = document.createElement('span')
+        detail.className = 'search-detail micro'
+        detail.textContent = result.detail
+        item.append(label, detail)
+        item.addEventListener('pointerdown', (event) => {
+          event.preventDefault()
+          this.choose(result)
+        })
+        list.append(item)
+      })
+    }
+
+    const close = () => {
+      panel.setAttribute('hidden', '')
+      this.q('[data-search-toggle]').setAttribute('aria-expanded', 'false')
+      field.value = ''
+      results = []
+      render()
+    }
+    this.closeSearch = close
+
+    field.addEventListener('input', () => {
+      results = this.search.search(field.value)
+      active = 0
+      render()
+    })
+
+    field.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        close()
+        return
+      }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        if (results.length === 0) return
+        active = (active + (event.key === 'ArrowDown' ? 1 : results.length - 1)) % results.length
+        render()
+        return
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        const chosen = results[active]
+        if (chosen) this.choose(chosen)
+      }
+    })
+
+    const toggle = this.q<HTMLButtonElement>('[data-search-toggle]')
+    toggle.addEventListener('click', () => {
+      const opening = panel.hasAttribute('hidden')
+      panel.toggleAttribute('hidden', !opening)
+      toggle.setAttribute('aria-expanded', String(opening))
+      if (opening) field.focus()
+    })
+
+    document.addEventListener('pointerdown', (event) => {
+      if (panel.hasAttribute('hidden')) return
+      const target = event.target as Node
+      if (panel.contains(target) || toggle.contains(target)) return
+      close()
+    })
+  }
+
+  /** Go to a result: pin it, frame it, and adopt its zone if it named one. */
+  private choose(result: SearchResult): void {
+    this.pin(result.lon, result.lat)
+    if (result.zone && isValidZone(result.zone)) {
+      this.basis = result.zone
+      this.q<HTMLSelectElement>('[data-basis]').value = result.zone
+      this.repaintTracks()
+    }
+    const zoom = Math.max(this.view.zoom, result.kind === 'zone' ? 2 : 4)
+    this.view = clampView(this.size, { centerLon: result.lon, centerLat: result.lat, zoom })
+    this.closeSearch?.()
+    this.markDirty()
+  }
+
+  // ------------------------------------------------------------------ almanac
+
+  private buildAlmanac(): void {
+    this.almanac = new Almanac()
+    this.almanac.element.id = 'almanac'
+    this.almanac.setHidden(!this.prefs.almanac)
+    this.stage.append(this.almanac.element)
+
+    // Picking an eclipse takes the map to it, and to where it is deepest.
+    this.almanac.onJump = (time, place) => {
+      this.mode = 'paused'
+      this.syncTransport()
+      if (place) {
+        this.view = clampView(this.size, { centerLon: place.lon, centerLat: place.lat, zoom: Math.max(this.view.zoom, 2.5) })
+      }
+      this.setTime(time)
+      this.draw()
+    }
+
+    const toggle = this.q<HTMLButtonElement>('[data-almanac-toggle]')
+    toggle.setAttribute('aria-expanded', String(!this.almanac.hidden))
+    toggle.addEventListener('click', () => {
+      this.almanac.setHidden(!this.almanac.hidden)
+      toggle.setAttribute('aria-expanded', String(!this.almanac.hidden))
+      this.prefs.almanac = !this.almanac.hidden
+      this.storePreferences()
+      // Fill it now rather than on the next frame: a panel that opens empty and
+      // populates a beat later reads as a stall.
+      this.draw()
+      this.markDirty()
+    })
+  }
+
+  // ------------------------------------------------------------------ places
+
+  /**
+   * Starring a place, and the strip of stars that comes back with it. This is
+   * the one piece of state that is worth keeping across visits without being in
+   * the address bar: a link describes a moment, a star describes a habit.
+   */
+  private buildSavedPlaces(): void {
+    const star = this.q<HTMLButtonElement>('[data-star]')
+    star.addEventListener('click', () => {
+      const site = this.focus
+      if (!site) return
+      const existing = this.prefs.saved.findIndex((p) => samePlace(p, site))
+      if (existing >= 0) this.prefs.saved.splice(existing, 1)
+      else this.prefs.saved.unshift({ name: site.name, country: site.country, lon: site.lon, lat: site.lat })
+      this.prefs.saved = this.prefs.saved.slice(0, 24)
+      this.storePreferences()
+      this.syncSavedPlaces()
+      this.markDirty()
+    })
+    this.syncSavedPlaces()
+  }
+
+  private syncSavedPlaces(): void {
+    const star = this.q<HTMLButtonElement>('[data-star]')
+    const saved = this.focus !== null && this.prefs.saved.some((p) => samePlace(p, this.focus!))
+    star.setAttribute('aria-pressed', String(saved))
+    star.classList.toggle('is-on', saved)
+    star.setAttribute('aria-label', saved ? 'Forget this place' : 'Save this place')
+  }
+
+  private storePreferences(): void {
+    this.prefs.layers = LAYER_FIELDS.filter((f) => this.layers[f.key]).map((f) => f.key)
+    this.prefs.basis = this.basis
+    this.prefs.rate = this.rate
+    savePreferences(this.prefs)
+  }
+
+  // ------------------------------------------------------------------ export
+
+  private buildShare(): void {
+    this.q<HTMLButtonElement>('[data-share]').addEventListener('click', async () => {
+      // Draw first: the renderer is idle when nothing has changed, and a canvas
+      // that has not been drawn into since the last composite reads back empty.
+      this.draw()
+      const reading = readingIn(this.basis, this.time)
+      const site = this.focus
+      const blob = await composeImage(this.mapCanvas, this.overlayCanvas, {
+        date: `${formatWeekday(reading)} ${formatDate(reading)}`,
+        time: formatClock(reading),
+        zone: this.basis === 'UTC' ? 'UTC' : zoneSummary(this.basis, this.time).offset,
+        place: site ? (site.country ? `${site.name}, ${site.country}` : site.name) : 'Heliograph',
+      })
+      const stamp = new Date(this.time).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+      await shareOrDownload(blob, `heliograph-${stamp}.png`)
+    })
+  }
+
+  // ------------------------------------------------------------------ world stats
+
+  /**
+   * How much of humanity is standing in daylight.
+   *
+   * The gazetteer carries a population for every named place, so this is a real
+   * measurement over 7,342 cities rather than a model: it is the share of that
+   * catalogued population whose Sun is above the horizon. It swings from about
+   * a third to about two thirds over a day, and the reason it never reaches
+   * either extreme is that the land, and so the people, are not evenly spread.
+   */
+  private daylitFraction(sun: SolarState): number {
+    const minute = Math.floor(this.time / MS_PER_MINUTE)
+    if (this.daylitCache?.minute === minute) return this.daylitCache.value
+    let lit = 0
+    let total = 0
+    for (let i = 0; i < this.world.namedCount; i++) {
+      const city = this.world.cities[i]!
+      const people = city.population
+      if (people <= 0) continue
+      total += people
+      if (elevationAt(city.lat, city.lon, sun) > HORIZON.sunrise) lit += people
+    }
+    const value = total > 0 ? lit / total : 0
+    this.daylitCache = { minute, value }
+    return value
+  }
+
+  /** The next equinox or solstice after the instant on screen. */
+  private nextSeason(): { label: string; instant: number } {
+    const year = new Date(this.time).getUTCFullYear()
+    const names: Array<[0 | 90 | 180 | 270, string]> = [
+      [0, 'Next equinox'],
+      [90, 'Next solstice'],
+      [180, 'Next equinox'],
+      [270, 'Next solstice'],
+    ]
+    for (const offset of [0, 1]) {
+      for (const [quarter, label] of names) {
+        const instant = seasonInstant(year + offset, quarter)
+        if (instant > this.time) return { label, instant }
+      }
+    }
+    return { label: 'Next solstice', instant: seasonInstant(year + 1, 90) }
+  }
+
+  /**
+   * The Moon for the instant on screen, worked out once a frame and kept.
+   *
+   * The gain is the whole of the phase and distance physics, folded into one
+   * number so the shader only has to do geometry: it is what a full moon at the
+   * zenith would give, scaled down for tonight's phase and tonight's distance.
+   */
+  private moonNow(): { state: MoonState; phase: MoonPhase; gain: number } {
+    if (this.moonCache && this.moonCache.time === this.time) return this.moonCache
+    const state = moonState(this.time)
+    const phase = moonPhase(solarState(this.time), state)
+    // moonlight() takes the altitude of the Moon at the place being lit, and the
+    // shader supplies that per pixel, so the gain is quoted at the zenith.
+    const gain = moonlight(90, phase, state.distanceKm)
+    this.moonCache = { time: this.time, state, phase, gain }
+    return this.moonCache
+  }
+
   private buildAnalemma(): Array<{ lon: number; lat: number }> {
     const year = new Date(this.time).getUTCFullYear()
     // UTC days start at the epoch, so the hour of day is plain arithmetic.

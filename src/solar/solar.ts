@@ -214,6 +214,8 @@ export function localSolar(lat: number, lon: number, state: SolarState): LocalSo
 
 /** Standard altitudes, in degrees, for the events the app draws and reports. */
 export const HORIZON = {
+  /** The top of the golden hour, where the light starts to redden. */
+  golden: 6,
   /** Upper limb of the Sun on the horizon, allowing for mean refraction. */
   sunrise: -0.833,
   civil: -6,
@@ -241,6 +243,13 @@ export interface DayEvents {
   /** Start of the UTC day the solar day was anchored to. */
   readonly dayStart: number
   readonly solarNoon: number
+  /**
+   * When the Sun passes +6 degrees, the top of the golden hour. Photographers
+   * mean the light between here and the horizon, which is warm because the beam
+   * is running through several times as much atmosphere as it does at noon.
+   */
+  readonly goldenMorning: number | null
+  readonly goldenEvening: number | null
   readonly sunrise: number | null
   readonly sunset: number | null
   readonly civilDawn: number | null
@@ -343,6 +352,8 @@ export function dayEvents(lat: number, lon: number, time: number | Date): DayEve
   return {
     dayStart,
     solarNoon,
+    goldenMorning: find(HORIZON.golden, true),
+    goldenEvening: find(HORIZON.golden, false),
     sunrise,
     sunset,
     civilDawn: find(HORIZON.civil, true),
@@ -410,7 +421,7 @@ export function analemma(year: number, utcHour = 12, samples = 365): Array<{ lon
  * terminator itself is unaffected, because feeding UTC straight into the solar
  * position moves the subsolar point by about one arcsecond.
  */
-const DELTA_T_SECONDS = 69.1
+export const DELTA_T_SECONDS = 69.1
 
 /** Table 27.B of Meeus: a first approximation to each event, in Julian Ephemeris Days. */
 const SEASON_MEAN: Record<0 | 90 | 180 | 270, readonly number[]> = {

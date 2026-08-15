@@ -1,0 +1,19 @@
+{
+  // The service worker runs in a different global than the app: no document, no
+  // window, and a ServiceWorkerGlobalScope whose types conflict with the DOM's.
+  // It gets its own strict pass rather than being loosened into the app's.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/sw.ts"]
+}

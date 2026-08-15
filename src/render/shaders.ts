@@ -18,6 +18,47 @@ uniform vec3 uView;         // centre longitude, centre latitude, world width in
 uniform float uLonOffset;   // which copy of the world this draw call is
 uniform vec2 uSun;          // solar declination and subsolar longitude, degrees
 
+/*
+ * Local time everywhere.
+ *
+ * Normally the whole map is one instant. In this mode every zone is drawn at
+ * the same reading of its own clock instead, so the picture answers "how light
+ * is it at five in the morning" for the entire world at once, and the zone
+ * boundaries become visible steps in the light.
+ *
+ * It costs almost nothing, because of a small piece of arithmetic. At a fixed
+ * local time, a zone whose offset is o is being drawn at the instant
+ * T - o, and the subsolar longitude moves fifteen degrees for every hour of
+ * that shift. Both terms fall out as a single shift of longitude: the Sun's
+ * hour angle at a place depends only on how far that place lies from the
+ * meridian its clock is keeping. So the mode is the ordinary calculation with
+ * the longitude displaced, plus a small correction to the declination, which
+ * drifts by up to a quarter of a degree across the fourteen hours of offset
+ * that separate the extreme zones.
+ */
+uniform sampler2D uOffsets; // geographic raster of UTC offsets, hours
+uniform float uLocalTime;   // 0 for one instant, 1 for one local time
+uniform float uRefOffset;   // the offset whose clock the rest are matched to
+uniform float uDecRate;     // change in solar declination, degrees per hour
+
+/** The UTC offset in force at a point: the zone's, or nautical time at sea. */
+float zoneOffset(vec2 lonlat) {
+  vec4 texel = texture(uOffsets, vec2((lonlat.x + 180.0) / 360.0, (90.0 - lonlat.y) / 180.0));
+  // The high seas keep nautical time, which really is the fifteen degree band.
+  if (texel.a < 0.5) return floor(lonlat.x / 15.0 + 0.5);
+  return texel.r * 32.0 - 12.0;
+}
+
+/** Geometric solar elevation in degrees. Mirrors elevationAt() in solar.ts. */
+float solarElevation(vec2 lonlat) {
+  float shift = uLocalTime > 0.0 ? zoneOffset(lonlat) - uRefOffset : 0.0;
+  float lat = radians(lonlat.y);
+  float dec = radians(uSun.x - uDecRate * shift);
+  float ha = radians(lonlat.x - 15.0 * shift - uSun.y);
+  float s = sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(ha);
+  return degrees(asin(clamp(s, -1.0, 1.0)));
+}
+
 /** Degrees to top-left origin screen pixels. */
 vec2 projectDeg(vec2 lonlat) {
   float worldW = uView.z;
@@ -41,14 +82,65 @@ vec4 pxToClip(vec2 px) {
   vec2 n = px / uResolution * 2.0 - 1.0;
   return vec4(n.x, -n.y, 0.0, 1.0);
 }
+`
 
-/** Geometric solar elevation in degrees. Mirrors elevationAt() in solar.ts. */
-float solarElevation(vec2 lonlat) {
-  float lat = radians(lonlat.y);
-  float dec = radians(uSun.x);
-  float ha = radians(lonlat.x - uSun.y);
-  float s = sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(ha);
-  return degrees(asin(clamp(s, -1.0, 1.0)));
+/**
+ * The Moon's shadow.
+ *
+ * A map of sunlight ought to know about the one thing that takes the sunlight
+ * away. This is the same disc overlap as eclipse.ts, per pixel, and it has to
+ * be per pixel: the Moon is close enough that two observers a few hundred
+ * kilometres apart see it against measurably different sky, which is exactly
+ * why totality is a track a hundred kilometres wide and not a hemisphere.
+ *
+ * Distances arrive in thousands of kilometres. A float carries about seven
+ * digits, and subtracting an Earth radius from an astronomical unit in plain
+ * kilometres would spend most of them.
+ */
+const ECLIPSE = /* glsl */ `
+uniform vec3 uSunVec;    // geocentric equatorial, thousands of km
+uniform vec3 uMoonVec;
+uniform float uGmst;     // Greenwich mean sidereal time, degrees
+uniform float uEclipse;  // 0 when no eclipse is anywhere near
+
+const float EARTH_R = 6.37814;
+const float SUN_R = 696.0;
+const float MOON_R = 1.7374;
+
+/** Fraction of the Sun's disc hidden at a point, by area. */
+float obscuration(vec2 lonlat) {
+  if (uEclipse <= 0.0) return 0.0;
+  float theta = radians(uGmst + lonlat.x);
+  float phi = radians(lonlat.y);
+  vec3 observer = EARTH_R * vec3(cos(phi) * cos(theta), cos(phi) * sin(theta), sin(phi));
+  vec3 toSun = uSunVec - observer;
+  vec3 toMoon = uMoonVec - observer;
+  // No Sun below the horizon to hide.
+  if (dot(observer, toSun) <= 0.0) return 0.0;
+
+  float ds = length(toSun);
+  float dm = length(toMoon);
+  float separation = acos(clamp(dot(toSun, toMoon) / (ds * dm), -1.0, 1.0));
+  float rs = asin(SUN_R / ds);
+  float rm = asin(MOON_R / dm);
+
+  if (separation >= rs + rm) return 0.0;
+  if (separation <= rm - rs) return 1.0;
+  if (separation <= rs - rm) return (rm * rm) / (rs * rs);
+
+  float a1 = acos(clamp((separation * separation + rs * rs - rm * rm) / (2.0 * separation * rs), -1.0, 1.0));
+  float a2 = acos(clamp((separation * separation + rm * rm - rs * rs) / (2.0 * separation * rm), -1.0, 1.0));
+  float area = rs * rs * (a1 - sin(2.0 * a1) * 0.5) + rm * rm * (a2 - sin(2.0 * a2) * 0.5);
+  return clamp(area / (3.14159265 * rs * rs), 0.0, 1.0);
+}
+
+/**
+ * What is left of the light. Totality is not darkness: the corona and the ring
+ * of distant sunlit sky leave something like deep twilight on the ground, which
+ * is about a ten thousandth of full daylight, so the floor is not zero.
+ */
+float eclipseShade(vec2 lonlat) {
+  return 1.0 - 0.985 * obscuration(lonlat);
 }
 `
 
@@ -116,6 +208,74 @@ float periodicNoise(vec2 p, float period) {
 }
 `
 
+/**
+ * Moonlight.
+ *
+ * A full moon at the zenith puts about a quarter of a lux on the ground against
+ * daylight's hundred thousand, so this is never anything but a whisper. It is
+ * still the reason a clear night with a moon up does not look like one without.
+ *
+ * The gain arrives already carrying the phase and the distance, worked out once
+ * on the CPU; what has to happen per pixel is the geometry, because the Moon is
+ * only up over half the world and its light falls off with the sine of its
+ * altitude exactly as the Sun's does. The tint is cold because the dark adapted
+ * eye is: at these levels vision is rod driven and the Purkinje shift shows.
+ */
+const MOONLIGHT = /* glsl */ `
+uniform vec2 uMoon;        // sublunar longitude and latitude, degrees
+uniform vec3 uMoonTint;    // scotopic blue grey, in linear light
+uniform float uMoonGain;   // phase and distance already folded in; 0 turns it off
+
+vec3 moonlight(vec2 lonlat, float solarElevationDeg) {
+  if (uMoonGain <= 0.0) return vec3(0.0);
+  float lat = radians(lonlat.y);
+  float dec = radians(uMoon.y);
+  float ha = radians(lonlat.x - uMoon.x);
+  float sinAltitude = sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(ha);
+  if (sinAltitude <= 0.0) return vec3(0.0);
+  // Only where the Sun has gone. Twilight is orders of magnitude brighter than
+  // any moon, so the light fades in as the sky darkens rather than switching on.
+  float night = 1.0 - smoothstep(-12.0, -1.0, solarElevationDeg);
+  return uMoonTint * uMoonGain * sinAltitude * night;
+}
+`
+
+// ---------------------------------------------------------------- zone offsets
+
+/**
+ * The UTC offset of every zone, rasterised into a geographic texture.
+ *
+ * Drawn once whenever the offsets change, which is when the date crosses a
+ * daylight saving transition, rather than per frame. Equirectangular and
+ * unprojected, so any later pass can sample it by longitude and latitude
+ * without knowing anything about the view.
+ */
+export const ZONE_OFFSET_VS =
+  VERSION +
+  /* glsl */ `
+precision highp float;
+in vec2 aPosition;   // longitude and latitude, degrees
+in float aOffset;    // the zone's current UTC offset, hours
+out float vOffset;
+void main() {
+  vOffset = aOffset;
+  gl_Position = vec4(aPosition.x / 180.0, aPosition.y / 90.0, 0.0, 1.0);
+}
+`
+
+export const ZONE_OFFSET_FS =
+  VERSION +
+  /* glsl */ `
+precision highp float;
+in float vOffset;
+out vec4 fragColor;
+void main() {
+  // Offsets run from -12 to +14 in quarter hours, so a byte holds them exactly
+  // at a scale of 32 hours. Alpha marks the pixel as belonging to a zone at all.
+  fragColor = vec4((vOffset + 12.0) / 32.0, 0.0, 0.0, 1.0);
+}
+`
+
 // ---------------------------------------------------------------- base plate
 
 /** A single oversized triangle covering the viewport. */
@@ -134,8 +294,10 @@ void main() {
 export const OCEAN_FS =
   VERSION +
   COMMON +
+  ECLIPSE +
   FRAG_COORDS +
   SHADING +
+  MOONLIGHT +
   /* glsl */ `
 uniform vec3 uGlint;
 uniform float uGlintGain;
@@ -164,6 +326,10 @@ void main() {
   float away = 90.0 - elevation;
   colour += uGlint * (exp(-away * away / 18.0) + exp(-away * away / 340.0) * 0.03) * uGlintGain;
 
+  colour *= eclipseShade(lonlat);
+  // Water is the darkest surface on the planet and reflects almost none of it.
+  colour += moonlight(lonlat, elevation) * 0.35;
+
   fragColor = vec4(colour, 1.0);
 }
 `
@@ -185,7 +351,9 @@ void main() {
 export const LAND_FS =
   VERSION +
   COMMON +
+  ECLIPSE +
   SHADING +
+  MOONLIGHT +
   /* glsl */ `
 uniform float uIceAmount;
 uniform sampler2D uTerrain;    // June albedo, decoded to linear by the sRGB sampler
@@ -259,6 +427,11 @@ void main() {
 
   vec3 base = mix(surfaceColour(uRampA, elevation) * albedo, surfaceColour(uRampB, elevation), ice);
 
+  base *= eclipseShade(vLonLat);
+  // Moonlight, off the ground's own albedo, so snow catches it and forest does
+  // not. This is what makes a moonlit Greenland read against a black ocean.
+  base += moonlight(vLonLat, elevation) * mix(rel, vec3(2.2), ice);
+
   fragColor = vec4(withDetail(base, grain, elevation), 1.0);
 }
 `
@@ -266,7 +439,9 @@ void main() {
 export const LAKE_FS =
   VERSION +
   COMMON +
+  ECLIPSE +
   SHADING +
+  MOONLIGHT +
   /* glsl */ `
 in vec2 vLonLat;
 out vec4 fragColor;
@@ -278,6 +453,8 @@ void main() {
   vec3 colour = surfaceColour(uRampA, elevation) * 0.82;
   float away = 90.0 - elevation;
   colour += vec3(0.92, 0.87, 0.74) * exp(-away * away / 40.0) * 0.45;
+  colour *= eclipseShade(vLonLat);
+  colour += moonlight(vLonLat, elevation) * 0.35;
   fragColor = vec4(colour, 1.0);
 }
 `

@@ -36,6 +36,18 @@ async function boot(): Promise<void> {
   window.__ready = true
 }
 
+/**
+ * Register the offline cache, and only in a build: the dev server has no
+ * worker to serve, and a stale one there would shadow every edit.
+ */
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register(new URL('sw.js', import.meta.url), { scope: './' }).catch(() => {
+      // No offline cache is a smaller loss than a failed start.
+    })
+  })
+}
+
 boot().catch((error: unknown) => {
   const message =
     error instanceof Error && error.message.includes('WebGL2')

@@ -195,6 +195,14 @@ export const LIGHT = {
   /** A warm rim on lit shores, a cold one on dark shores. */
   coastDay: oklchToLinearRgb(0.95, 0.052, 76),
   coastNight: oklchToLinearRgb(0.44, 0.028, 252),
+  /**
+   * Moonlight. The Moon's own reflectance is a warm grey, close to worn asphalt,
+   * but moonlight is famously seen as blue, and that is the eye rather than the
+   * light: at a quarter of a lux vision is rod driven, and rods peak far bluer
+   * than cones do. The colour here follows the eye, because that is what a
+   * picture of a moonlit night has to look like.
+   */
+  moonlight: oklchToLinearRgb(0.86, 0.045, 254),
 } as const
 
 // ---------------------------------------------------------------- interface

@@ -80,7 +80,43 @@ clock, so the terminator barely moves sideways and instead tilts, and the polar
 day and polar night open and close. Space bar plays and pauses.
 
 **Find a place.** Move the pointer over the map for a live readout, or click to
-pin one. Scroll to zoom, drag to pan, `0` to reset.
+pin one. Press `/` to search 7,342 places and every IANA zone by name; accents
+are folded, so Malmo finds Malmö, and the larger place wins a tie, so London is
+London and not Londonderry. Scroll to zoom, drag to pan, `0` to reset. Star a
+place to keep it.
+
+**The almanac.** Press `A` for everything the arithmetic already knows about the
+pinned place: the whole twilight sequence rather than just sunrise, both golden
+hours, solar noon, how much longer today is than yesterday, the Moon's phase and
+rise and set, and a chart of the daylight across the whole year with today
+ruled on it. Somewhere above sixty degrees in summer the first and last light
+simply stop happening, and the almanac says so rather than inventing a time.
+
+**The Moon.** Its position follows Meeus chapters 47 and 48 in full, all one
+hundred and twenty periodic terms, which holds it to about ten arcseconds. It is
+drawn at the point it stands overhead, showing tonight's phase as a real
+terminator: a half ellipse, because that is what a great circle on a sphere
+looks like from an angle. And it lights the ground. Full moonlight is a quarter
+of a lux against daylight's hundred thousand, so it is never more than a
+whisper, but it is the reason a clear night with a moon up does not look like
+one without. The light is cold because the dark adapted eye is.
+
+**One local time, everywhere.** Normally the map is one instant. Turn on `Local
+time everywhere` and every zone is drawn at the same reading of its own clock
+instead, so the map answers "how light is it at five in the morning" for the
+whole world at once. The zone boundaries become visible steps in the light, and
+what the steps show is how far each place sits from the meridian its clock is
+keeping. At local noon on a December solstice there is one sun glint per zone,
+strung along the Tropic of Capricorn.
+
+**Eclipses.** The almanac lists the eclipses to come, solar and lunar, searched
+out of the geometry rather than read from a table, so the horizon is a century
+and the limit is patience rather than data. Pick one and the map goes to the
+instant of greatest eclipse, where the Moon's shadow is drawn on the ground:
+the real umbra and penumbra, worked out per pixel, because the Moon is close
+enough that two observers a few hundred kilometres apart see it against
+measurably different sky. That is why totality is a track a hundred kilometres
+wide and not a hemisphere.
 
 **On a phone.** The map is the whole screen. The rail floats over its top edge
 and the console folds into a bottom sheet that peeks the clock and the day
@@ -99,6 +135,11 @@ boundaries with each zone's own clock. Turn on `Same clock time` as well and
 every zone currently reading the same wall clock as your chosen one lights up.
 That is the quickest way to answer "where in the world is it 13:34 right now".
 
+**Take it with you.** The share button writes a PNG of the map with the instant
+captioned on it, through the system share sheet on a phone and as a download
+everywhere else. The whole app is precached by a service worker, so once it has
+been opened it runs with no network at all, and it installs to a home screen.
+
 Everything is in the address bar, so any view can be linked to:
 
 ```
@@ -110,6 +151,8 @@ Everything is in the address bar, so any view can be linked to:
 | Key | Action |
 |---|---|
 | Space | Play or pause |
+| `/` | Find a place |
+| `A` | Almanac |
 | Left, Right | Step an hour, or a day with Shift |
 | `+`, `-` | Zoom |
 | `0` | Reset the view |
@@ -180,7 +223,7 @@ a sandbox with no network at all.
 ## How it is put together
 
 ```
-src/solar/      solar position, sunrise and sunset, the analemma, the seasons
+src/solar/      solar position, the Moon, eclipses, sunrise and sunset, the seasons
 src/time/       time zone arithmetic, built entirely on Intl
 src/data/       the packed world data and the spatial lookups over it
 src/render/     WebGL2 renderer, the colour ramps, the vector overlay

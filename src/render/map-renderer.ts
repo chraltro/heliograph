@@ -22,6 +22,8 @@ export interface Tuning {
   coastIntensity: number
   /** How much of the coastline survives in full daylight. */
   coastDayFade: number
+  /** Brightness of a full moon at the zenith, in scene referred linear light. */
+  moonlight: number
   borderWidth: number
   borderIntensity: number
   sunspotSize: number
@@ -46,6 +48,7 @@ export const DEFAULT_TUNING: Tuning = {
   coastWidth: 0.9,
   coastIntensity: 0.5,
   coastDayFade: 0.16,
+  moonlight: 0.05,
   borderWidth: 0.85,
   borderIntensity: 0.28,
   sunspotSize: 14,
@@ -71,6 +74,25 @@ export interface Frame {
   /** Viewport in CSS pixels. */
   size: Size
   sun: SolarState
+  /**
+   * Where the Moon stands overhead and how hard it is shining, with the phase
+   * and the distance already folded into the gain. Null leaves the night dark.
+   */
+  moon: { lon: number; lat: number; gain: number } | null
+  /**
+   * Set to draw every zone at the same reading of its own clock instead of one
+   * instant across the whole world. The offset is the zone whose clock the rest
+   * are matched to; the rate is how fast the solar declination is drifting, in
+   * degrees per hour, which corrects the small error over fourteen hours of
+   * offset.
+   */
+  localTime: { referenceOffsetHours: number; declinationRatePerHour: number } | null
+  /**
+   * The Sun and Moon as vectors, in thousands of kilometres, so the shader can
+   * work out how much of the Sun each point can still see. Null when the two
+   * are nowhere near each other, which is almost always.
+   */
+  eclipse: { sun: readonly [number, number, number]; moon: readonly [number, number, number]; gmst: number } | null
   layers: Layers
   /** Seconds since load, for the film grain. Hold it still to freeze the grain. */
   time: number
@@ -84,6 +106,10 @@ interface Pass {
 }
 
 const BLOOM_DIVISOR = 4
+
+/** The zone offset raster, in geographic pixels. */
+const ZONE_RASTER_WIDTH = 2048
+const ZONE_RASTER_HEIGHT = 1024
 
 export class MapRenderer {
   private readonly gl: WebGL2RenderingContext
@@ -106,6 +132,12 @@ export class MapRenderer {
   private terrain: WebGLTexture
   private season: WebGLTexture
   private terrainReady = false
+  private readonly zoneOffsetPass: Pass
+  private readonly zoneOffsetBuffer: WebGLBuffer
+  private readonly zoneVertexFeature: Float32Array
+  private readonly zoneOffsetCount: number
+  private zoneOffsetTexture: WebGLTexture
+  private zoneOffsetFbo: WebGLFramebuffer | null = null
 
   private width = 1
   private height = 1
@@ -164,6 +196,30 @@ export class MapRenderer {
       uniforms: new Uniforms(gl, lakeProgram),
       vao: createVao(gl, lakeProgram, { aPosition: { buffer: lakePositions, size: 2 } }, lakeIndices),
     }
+
+    // The zone offset raster: zone polygons drawn straight into a geographic
+    // texture, so every later pass can ask what the clock says at a point.
+    const zoneMesh = triangulate(world.timezones, true)
+    const zoneProgram = createProgram(gl, S.ZONE_OFFSET_VS, S.ZONE_OFFSET_FS)
+    const zonePositions = createBuffer(gl, zoneMesh.positions)
+    const zoneIndices = createBuffer(gl, zoneMesh.indices, gl.ELEMENT_ARRAY_BUFFER)
+    this.zoneVertexFeature = zoneMesh.featureIds ?? new Float32Array(zoneMesh.positions.length / 2)
+    this.zoneOffsetBuffer = createBuffer(gl, new Float32Array(this.zoneVertexFeature.length))
+    this.zoneOffsetCount = zoneMesh.indices.length
+    this.zoneOffsetPass = {
+      program: zoneProgram,
+      uniforms: new Uniforms(gl, zoneProgram),
+      vao: createVao(
+        gl,
+        zoneProgram,
+        {
+          aPosition: { buffer: zonePositions, size: 2 },
+          aOffset: { buffer: this.zoneOffsetBuffer, size: 1 },
+        },
+        zoneIndices,
+      ),
+    }
+    this.zoneOffsetTexture = this.createZoneOffsetTarget()
 
     const coastData = ringSegments(world.land)
     const coastProgram = createProgram(gl, S.LINE_VS, S.COASTLINE_FS)
@@ -242,6 +298,57 @@ export class MapRenderer {
     const groundLinear = hexToLinearRgb(INK[0])
     const invertTone = (v: number) => -Math.log(Math.max(1e-6, 1 - v)) / DEFAULT_TUNING.exposure
     this.groundClear = [invertTone(groundLinear[0]), invertTone(groundLinear[1]), invertTone(groundLinear[2])]
+  }
+
+  /** The geographic raster the zone offsets are drawn into, and its target. */
+  private createZoneOffsetTarget(): WebGLTexture {
+    const gl = this.gl
+    const texture = gl.createTexture()
+    if (!texture) throw new Error('could not create the zone offset texture')
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    // Two thousand pixels across the world is a little over ten kilometres at
+    // the equator, which is finer than any zone boundary the data carries.
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, ZONE_RASTER_WIDTH, ZONE_RASTER_HEIGHT)
+    // Nearest, because an offset is a label and interpolating between two of
+    // them would invent a zone that does not exist along every boundary.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.bindTexture(gl.TEXTURE_2D, null)
+    this.zoneOffsetFbo = gl.createFramebuffer()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.zoneOffsetFbo)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    return texture
+  }
+
+  /**
+   * Redraw the offset raster. Called when the offsets change, which is when a
+   * daylight saving transition is crossed, and not once a frame.
+   */
+  setZoneOffsets(offsetsByFeature: Float64Array): void {
+    const gl = this.gl
+    const perVertex = new Float32Array(this.zoneVertexFeature.length)
+    for (let i = 0; i < perVertex.length; i++) {
+      perVertex[i] = offsetsByFeature[this.zoneVertexFeature[i]!] ?? 0
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.zoneOffsetBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, perVertex, gl.STATIC_DRAW)
+    gl.bindBuffer(gl.ARRAY_BUFFER, null)
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.zoneOffsetFbo)
+    gl.viewport(0, 0, ZONE_RASTER_WIDTH, ZONE_RASTER_HEIGHT)
+    gl.disable(gl.BLEND)
+    // Alpha zero means "no zone here", which the shader reads as the open sea.
+    gl.clearColor(0, 0, 0, 0)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.useProgram(this.zoneOffsetPass.program)
+    gl.bindVertexArray(this.zoneOffsetPass.vao)
+    gl.drawElements(gl.TRIANGLES, this.zoneOffsetCount, gl.UNSIGNED_INT, 0)
+    gl.bindVertexArray(null)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, this.width, this.height)
   }
 
   private pass(vs: string, fs: string, vao: WebGLVertexArrayObject | null): Pass {
@@ -425,11 +532,30 @@ export class MapRenderer {
 
   /** Common uniforms every geographic stage needs. */
   private setView(u: Uniforms, frame: Frame, dpr: number, lonOffset: number): void {
+    const gl = this.gl
     u.f2('uResolution', this.width, this.height)
     u.f3('uView', frame.view.centerLon, frame.view.centerLat, worldWidth(frame.size, frame.view) * dpr)
     u.f1('uLonOffset', lonOffset)
     u.f2('uSun', frame.sun.declination, frame.sun.subsolarLon)
+    gl.activeTexture(gl.TEXTURE4)
+    gl.bindTexture(gl.TEXTURE_2D, this.zoneOffsetTexture)
+    gl.activeTexture(gl.TEXTURE0)
+    u.i1('uOffsets', 4)
+    u.f1('uLocalTime', frame.localTime ? 1 : 0)
+    u.f1('uRefOffset', frame.localTime?.referenceOffsetHours ?? 0)
+    u.f1('uDecRate', frame.localTime?.declinationRatePerHour ?? 0)
+    const eclipse = frame.eclipse
+    u.f3('uSunVec', eclipse?.sun[0] ?? 0, eclipse?.sun[1] ?? 0, eclipse?.sun[2] ?? 1)
+    u.f3('uMoonVec', eclipse?.moon[0] ?? 0, eclipse?.moon[1] ?? 0, eclipse?.moon[2] ?? 1)
+    u.f1('uGmst', eclipse?.gmst ?? 0)
+    u.f1('uEclipse', eclipse ? 1 : 0)
+    u.f2('uMoon', frame.moon?.lon ?? 0, frame.moon?.lat ?? 0)
+    u.f3('uMoonTint', ...LIGHT.moonlight)
+    u.f1('uMoonGain', (frame.moon?.gain ?? 0) * this.moonlightGain)
   }
+
+  /** Scales every moonlit surface at once, so the effect can be tuned by eye. */
+  private moonlightGain = DEFAULT_TUNING.moonlight
 
   /** Bind the surface ramps a pass shades from. */
   private setRamps(u: Uniforms, t: Tuning, a: SurfaceName, b?: SurfaceName): void {
@@ -449,6 +575,7 @@ export class MapRenderer {
 
   render(frame: Frame): void {
     const gl = this.gl
+    this.moonlightGain = frame.tuning.moonlight
     const dpr = this.width / frame.size.width
     const t = frame.tuning
     const copies = this.visibleCopies(frame)
@@ -647,5 +774,7 @@ export class MapRenderer {
     for (const texture of Object.values(this.ramps)) this.gl.deleteTexture(texture)
     this.gl.deleteTexture(this.terrain)
     this.gl.deleteTexture(this.season)
+    this.gl.deleteTexture(this.zoneOffsetTexture)
+    if (this.zoneOffsetFbo) this.gl.deleteFramebuffer(this.zoneOffsetFbo)
   }
 }

@@ -468,10 +468,10 @@ select:hover {
   font-size: 15px;
   font-weight: 500;
   color: var(--ink-700);
-  margin-top: 5px !important;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .place-coords {
@@ -1008,6 +1008,16 @@ select:hover {
     background-size: 15px;
   }
 
+  .almanac {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 56px);
+    left: max(var(--space-3), env(safe-area-inset-left));
+    right: max(var(--space-3), env(safe-area-inset-right));
+    width: auto;
+    max-height: calc(100dvh - 220px);
+    z-index: 7;
+  }
+
   .layers {
     position: fixed;
     top: calc(env(safe-area-inset-top) + 56px);
@@ -1256,4 +1266,268 @@ select:hover {
   .fab {
     bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
   }
+}
+
+/* ---------------------------------------------------------------- search */
+
+/*
+ * The palette floats over the map rather than displacing it, because the map is
+ * the answer to the question being typed.
+ */
+.search {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100% - var(--space-4) * 2));
+  z-index: 8;
+  background: linear-gradient(180deg, rgba(6, 11, 16, 0.94) 0%, rgba(6, 11, 16, 0.97) 100%);
+  backdrop-filter: blur(16px) saturate(0.75);
+  -webkit-backdrop-filter: blur(16px) saturate(0.75);
+  border-radius: 10px;
+  overflow: hidden;
+  animation: panel-in var(--dur-move) var(--ease-out);
+}
+
+.search-field {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-800);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  width: 100%;
+  padding: 13px var(--space-4);
+  outline: none;
+}
+
+.search-field::placeholder {
+  color: var(--ink-400);
+}
+
+.search-field::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(46vh, 340px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.search-result {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 9px var(--space-4);
+  cursor: pointer;
+}
+
+.search-result.is-active {
+  background: var(--ink-100);
+}
+
+.search-label {
+  font-size: 13px;
+  color: var(--ink-700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-detail {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--ink-400);
+}
+
+.search-results:empty {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- almanac */
+
+.almanac {
+  top: var(--space-3);
+  right: var(--space-3);
+  width: 384px;
+  max-height: calc(100% - var(--space-6));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 3;
+}
+
+.almanac-place {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-700);
+}
+
+.almanac-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.almanac-heading {
+  margin: 0 0 var(--space-2);
+  color: var(--sun-400);
+}
+
+.almanac-heading-spaced {
+  margin-top: var(--space-4);
+}
+
+.almanac-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.almanac-rows > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.almanac-rows dt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.almanac-rows > div.is-quiet dd {
+  color: var(--ink-500);
+}
+
+.almanac-rows dd {
+  margin: 0;
+  text-align: right;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.almanac-chart {
+  display: block;
+  width: 100%;
+  height: 132px;
+  border-radius: 5px;
+}
+
+.almanac-caption {
+  margin: var(--space-2) 0 0;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  color: var(--ink-400);
+}
+
+/* ------------------------------------------------------------ small controls */
+
+.button-icon {
+  width: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.button-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+}
+
+.place-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 5px !important;
+  min-width: 0;
+}
+
+.icon-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-400);
+  padding: 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  transition: color var(--dur-tap) var(--ease-out);
+}
+
+.icon-button svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.icon-button:hover {
+  color: var(--ink-700);
+}
+
+.icon-button.is-on {
+  color: var(--sun-400);
+}
+
+/* The star and the share button are sized for a finger on a touch screen. */
+@media (pointer: coarse) {
+  .icon-button {
+    padding: 8px;
+  }
+}
+
+/* ---------------------------------------------------------------- eclipses */
+
+.almanac-eclipses {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.almanac-eclipse button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  margin: 0 calc(var(--space-2) * -1);
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink-600);
+  transition: background var(--dur-tap) var(--ease-out);
+}
+
+.almanac-eclipse button:hover {
+  background: var(--ink-100);
+  color: var(--ink-800);
+}
+
+.almanac-eclipse-kind {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--sun-400);
+}
+
+.almanac-eclipse-detail {
+  color: var(--ink-400);
+  font-size: 9.5px;
+  white-space: nowrap;
 }

@@ -258,7 +258,9 @@ test('every control can be reached with the keyboard', async () => {
   await apply(NOON)
   await page.locator('[data-basis]').focus()
   const reachable: string[] = []
-  for (let i = 0; i < 22; i++) {
+  // Generous, because a native date input is several tab stops on its own and
+  // the rail has grown a search button and an almanac button since.
+  for (let i = 0; i < 36; i++) {
     await page.keyboard.press('Tab')
     reachable.push(
       await page.evaluate(() => {
@@ -286,6 +288,179 @@ test('the layout survives a phone', async () => {
   expect(overflow.vertical).toBeLessThanOrEqual(0)
   expect(overflow.consoleTop).toBeGreaterThan(200)
   await page.setViewportSize({ width: 1440, height: 900 })
+})
+
+test('search finds a place, pins it and flies to it', async () => {
+  await apply(NOON)
+  await page.locator('[data-search-toggle]').click()
+  await page.locator('[data-search-field]').fill('reykjav')
+  // Natural Earth's gazetteer spells its names without diacritics, which is
+  // exactly why the search folds accents before matching.
+  await expect(page.locator('.search-result').first()).toContainText('Reykjavik')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('[data-place-name]')).toHaveText('Reykjavik, Iceland')
+  const view = await page.evaluate(
+    () => (window.__heliograph as unknown as { view: { centerLat: number; zoom: number } }).view,
+  )
+  expect(view.centerLat).toBeGreaterThan(60)
+  expect(view.zoom).toBeGreaterThanOrEqual(4)
+})
+
+test('search ranks the larger place first and offers zones too', async () => {
+  await page.locator('[data-search-toggle]').click()
+  await page.locator('[data-search-field]').fill('london')
+  const labels = await page.locator('.search-result .search-label').allTextContents()
+  // London before Londonderry, and the zone offered alongside the city.
+  expect(labels[0]).toBe('London')
+  expect(labels.join(' ')).toContain('London, Europe')
+  await page.keyboard.press('Escape')
+})
+
+test('the almanac reports the whole twilight sequence and the Moon', async () => {
+  await apply('?t=2026-08-14T12:00:00Z&play=off&tz=UTC&pin=59.92,10.75&layers=places')
+  await page.locator('[data-almanac-toggle]').click()
+  await expect(page.locator('.almanac')).toBeVisible()
+  await expect(page.locator('[data-almanac-sun] div').first()).toBeVisible()
+
+  const rows = async (selector: string) =>
+    Object.fromEntries(
+      await page.locator(selector).locator('div').evaluateAll((els) =>
+        els.map((el) => [el.querySelector('dt')!.textContent!, el.querySelector('dd')!.textContent!]),
+      ),
+    )
+
+  const sun = await rows('[data-almanac-sun]')
+  // Oslo on 14 August 2026. The clock basis above is UTC, and the almanac
+  // still answers in Oslo's own zone, because an almanac for a place is about
+  // that place: these are the same times the console gives with tz=Europe/Oslo.
+  expect(sun['Sunrise']).toBe('05:29')
+  expect(sun['Sunset']).toBe('21:12')
+  expect(sun['Daylight']).toBe('15h 44m')
+  // Oslo has no astronomical night in August: the Sun bottoms out at 16 degrees
+  // below the horizon, so first and last light simply do not happen and are
+  // reported as absent rather than invented.
+  expect(sun['First light']).toContain('—')
+  expect(sun['Dawn'] < sun['Sunrise']).toBe(true)
+  // Days are shortening in August, so the change is negative.
+  expect(sun['Change']).toMatch(/^−/)
+
+  const moon = await rows('[data-almanac-moon]')
+  expect(moon['Phase']).toBe('Waxing crescent')
+  expect(moon['Lit']).toMatch(/^\d+%$/)
+  expect(moon['Distance']).toMatch(/^3\d\d,\d\d\d km$/)
+
+  // In December the whole sequence exists, and it runs in order.
+  await apply('?t=2026-12-14T12:00:00Z&play=off&tz=UTC&pin=59.92,10.75&layers=places')
+  const winter = await rows('[data-almanac-sun]')
+  expect(winter['First light'] < winter['Dawn']).toBe(true)
+  expect(winter['Dawn'] < winter['Sunrise']).toBe(true)
+  expect(winter['Sunrise'] < winter['Solar noon']).toBe(true)
+  expect(winter['Solar noon'] < winter['Sunset']).toBe(true)
+  expect(winter['Sunset'] < winter['Dusk']).toBe(true)
+  expect(winter['Dusk'] < winter['Last light']).toBe(true)
+  // And in December the days are still shortening, but only just.
+  expect(winter['Change']).toMatch(/^−/)
+
+  await page.locator('[data-almanac-toggle]').click()
+})
+
+test('the world readouts count people in daylight and the next season', async () => {
+  await apply('?t=2026-06-21T12:00:00Z&play=off&tz=UTC')
+  const daylit = await page.locator('[data-daylit]').textContent()
+  expect(daylit).toMatch(/^\d+\.\d%$/)
+  const fraction = Number.parseFloat(daylit!)
+  // Never all and never none: the catalogued population is spread over every
+  // longitude, so the share in daylight stays well inside the extremes.
+  expect(fraction).toBeGreaterThan(15)
+  expect(fraction).toBeLessThan(85)
+
+  // Three weeks before the June solstice, so that is what is next. At noon on
+  // the solstice itself it has already passed and the equinox is next, which is
+  // right but makes for a confusing assertion.
+  await apply('?t=2026-06-01T12:00:00Z&play=off&tz=UTC')
+  await expect(page.locator('[data-season-label]')).toHaveText('Next solstice')
+  expect(await page.locator('[data-season]').textContent()).toMatch(/^\d+[dh]/)
+})
+
+test('starring a place survives a reload', async () => {
+  await apply('?t=2026-08-14T12:00:00Z&play=off&tz=UTC&pin=59.92,10.75')
+  await page.locator('[data-star]').click()
+  await expect(page.locator('[data-star]')).toHaveAttribute('aria-pressed', 'true')
+  const stored = await page.evaluate(() => window.localStorage.getItem('heliograph.v1'))
+  expect(stored).toContain('Oslo')
+})
+
+test('the moonlight layer changes the night side and nothing else', async () => {
+  // A night pixel far from any city, with the Moon well up over it.
+  const query = (moon: boolean) =>
+    `?t=2026-08-28T00:00:00Z&play=off&tz=UTC&z=1&lon=0&lat=0&layers=${moon ? 'moon' : ''}`
+  // A full Moon sits at the antisolar point by definition, so sampling there
+  // guarantees both a dark sky and the Moon directly overhead.
+  await apply(query(false))
+  const dark = await sampleAt(0, -10)
+  await apply(query(true))
+  const lit = await sampleAt(0, -10)
+  expect(luma(lit)).toBeGreaterThan(luma(dark))
+})
+
+test('local time everywhere puts the whole world on one clock', async () => {
+  // Open ocean at the same latitude, in four different parts of the world.
+  const points: Array<[number, number]> = [
+    [-150, 45],
+    [-40, 45],
+    [-25, 45],
+    [-170, 45],
+  ]
+  const read = async (query: string) => {
+    await apply(query)
+    const out: number[] = []
+    for (const [lon, lat] of points) out.push(luma(await sampleAt(lon, lat)))
+    return out
+  }
+  const spread = (values: number[]) => Math.max(...values) - Math.min(...values)
+
+  const view = 'z=1&lon=0&lat=0'
+  const instant = await read(`?t=2026-06-21T05:00:00Z&play=off&tz=UTC&${view}&layers=`)
+  const local = await read(`?t=2026-06-21T05:00:00Z&play=off&tz=UTC&${view}&layers=localTime`)
+
+  // Normally those four points are spread from the middle of the night to the
+  // middle of the morning. On one local clock they are all at the same hour of
+  // their own day, so they look alike.
+  expect(spread(instant)).toBeGreaterThan(25)
+  expect(spread(local)).toBeLessThan(spread(instant) / 2)
+
+  // And at five in the morning in June the northern hemisphere is up and the
+  // southern is not, which is the fact the mode exists to show.
+  await apply(`?t=2026-06-21T05:00:00Z&play=off&tz=UTC&${view}&layers=localTime`)
+  expect(luma(await sampleAt(-40, 45))).toBeGreaterThan(luma(await sampleAt(-40, -45)) + 15)
+})
+
+test('an eclipse puts the Moon shadow on the ground', async () => {
+  // Totality over Wyoming during the eclipse of 21 August 2017.
+  await apply('?t=2017-08-21T17:43:50Z&play=off&tz=UTC&z=1&lon=0&lat=0&layers=')
+  const shadowed = luma(await sampleAt(-106.3, 42.85))
+  // The same place two hours earlier, in ordinary sunshine.
+  await apply('?t=2017-08-21T15:43:50Z&play=off&tz=UTC&z=1&lon=0&lat=0&layers=')
+  const sunlit = luma(await sampleAt(-106.3, 42.85))
+  expect(sunlit).toBeGreaterThan(shadowed * 3)
+
+  // New York, outside the umbra at that moment, keeps its light.
+  await apply('?t=2017-08-21T17:43:50Z&play=off&tz=UTC&z=1&lon=0&lat=0&layers=')
+  expect(luma(await sampleAt(-74, 40.7))).toBeGreaterThan(shadowed * 3)
+})
+
+test('the almanac lists eclipses and jumps to one', async () => {
+  await apply('?t=2026-08-14T12:00:00Z&play=off&tz=UTC&pin=59.92,10.75&layers=places')
+  await page.locator('[data-almanac-toggle]').click()
+  await expect(page.locator('.almanac-eclipse').first()).toBeVisible()
+  const first = await page.locator('.almanac-eclipse button').first().textContent()
+  // The next eclipse after 14 August 2026 is the partial lunar of the 28th.
+  expect(first).toContain('28 AUG 2026')
+  expect(first).toContain('lunar')
+
+  await page.locator('.almanac-eclipse button').first().click()
+  await expect(page.locator('[data-date]')).toHaveText('FRI 28 AUG 2026')
+  await page.locator('[data-almanac-toggle]').click()
 })
 
 test('nothing was logged to the console along the way', async () => {

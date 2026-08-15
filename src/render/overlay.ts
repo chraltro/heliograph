@@ -66,6 +66,14 @@ export interface OverlayFrame {
   highlightZones: ReadonlySet<number>
   /** Subsolar track over the year, as lon and lat pairs. */
   analemma: Array<{ lon: number; lat: number }> | null
+  /** Where the Moon stands overhead, and how much of it is lit. */
+  moon: { lon: number; lat: number; illumination: number; waxing: boolean } | null
+  /**
+   * True when every zone is drawn at its own clock rather than one instant.
+   * The subsolar point and the twilight circles describe a single instant, so
+   * they would be describing a map that is no longer on screen.
+   */
+  localTime: boolean
   hover: { lon: number; lat: number } | null
   pinned: { lon: number; lat: number; label: string } | null
   /** 0 to 1, fades the whole overlay in on load. */
@@ -124,8 +132,9 @@ export class MapOverlay {
     }
     if (frame.layers.graticule) this.drawGraticule(frame)
     if (frame.layers.analemma && frame.analemma) this.drawAnalemma(frame)
-    if (frame.layers.boundaries) this.drawTwilightBoundaries(frame)
-    this.drawSubsolar(frame)
+    if (frame.layers.boundaries && !frame.localTime) this.drawTwilightBoundaries(frame)
+    if (!frame.localTime) this.drawSubsolar(frame)
+    if (frame.moon) this.drawSublunar(frame, frame.moon)
     if (frame.layers.timezones) this.drawZoneLabels(frame)
     if (frame.layers.places) this.drawPlaceLabels(frame)
     if (frame.pinned) this.drawPin(frame, frame.pinned)
@@ -460,6 +469,61 @@ export class MapOverlay {
       ctx.lineWidth = this.hairline * this.dpr
       ctx.beginPath()
       ctx.arc(cx, ay, 4.5, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+    }
+  }
+
+  /**
+   * The sublunar point, drawn as the Moon actually looks tonight.
+   *
+   * The terminator on a real lunar disc is a half ellipse, not an offset
+   * circle: the boundary between lit and unlit is a great circle on a sphere
+   * seen at an angle, so it projects to an ellipse whose width is the cosine
+   * of the phase angle. Drawing it that way costs one extra arc and is the
+   * difference between a Moon and a cookie with a bite out of it.
+   */
+  private drawSublunar(
+    frame: OverlayFrame,
+    moon: { lon: number; lat: number; illumination: number; waxing: boolean },
+  ): void {
+    const { ctx } = this
+    const w = worldWidth(frame.size, frame.view)
+    const [x, y] = project(frame.size, frame.view, moon.lon, moon.lat)
+    const radius = 6.5
+
+    for (const offset of [-w, 0, w]) {
+      const cx = x + offset
+      if (cx < -30 || cx > frame.size.width + 30) continue
+      ctx.save()
+      ctx.translate(cx, y)
+
+      // The unlit disc first, so the lit part is drawn over it.
+      ctx.fillStyle = INK[200]
+      ctx.globalAlpha *= 0.85
+      ctx.beginPath()
+      ctx.arc(0, 0, radius, 0, Math.PI * 2)
+      ctx.fill()
+
+      // The lit fraction runs 0 to 1 across the disc, so the terminator's
+      // semi-minor axis is how far that boundary sits from the centre.
+      const k = Math.min(1, Math.max(0, moon.illumination))
+      const waxing = moon.waxing
+      ctx.fillStyle = INK[800]
+      ctx.beginPath()
+      // The limb: the half of the circle on the lit side.
+      const from = waxing ? -Math.PI / 2 : Math.PI / 2
+      ctx.arc(0, 0, radius, from, from + Math.PI, false)
+      // The terminator: an ellipse of the same height, bulging toward the lit
+      // limb when gibbous and away from it when crescent.
+      ctx.ellipse(0, 0, radius * Math.abs(2 * k - 1), radius, 0, from + Math.PI, from, k > 0.5)
+      ctx.fill()
+
+      ctx.strokeStyle = INK[400]
+      ctx.globalAlpha *= 0.7
+      ctx.lineWidth = this.hairline * this.dpr
+      ctx.beginPath()
+      ctx.arc(0, 0, radius, 0, Math.PI * 2)
       ctx.stroke()
       ctx.restore()
     }

@@ -8,7 +8,7 @@
     "data": "node scripts/build-data.mjs",
     "terrain": "node scripts/build-terrain.mjs",
     "dev": "vite",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173 --strictPort",
     "test": "vitest run",
