@@ -19,6 +19,7 @@ declare global {
       applyState(query: string): void
       samplePixel(x: number, y: number): [number, number, number]
       locate(lon: number, lat: number): [number, number]
+      sublunar(): { lon: number; lat: number }
     }
   }
 }
@@ -60,6 +61,16 @@ async function apply(query: string): Promise<void> {
 }
 
 const luma = ([r, g, b]: [number, number, number]) => 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+/** The overlay canvas, which carries the vector work, at a place. */
+async function sampleOverlayAt(lon: number, lat: number): Promise<[number, number, number, number]> {
+  return page.evaluate(([a, b]) => {
+    const [x, y] = window.__heliograph!.locate(a!, b!)
+    const canvas = document.querySelector('.overlay') as HTMLCanvasElement
+    const d = canvas.getContext('2d')!.getImageData(Math.round(x), Math.round(y), 1, 1).data
+    return [d[0]!, d[1]!, d[2]!, d[3]!]
+  }, [lon, lat])
+}
 
 async function sampleAt(lon: number, lat: number): Promise<[number, number, number]> {
   return page.evaluate(([a, b]) => {
@@ -482,6 +493,87 @@ test('an eclipse is drawn as the line it is, not as a spot', async () => {
   expect(await warmNear(-86.78, 36.17)).toBe(false)
 })
 
+test('the umbra is drawn as a band of its real width, not a hairline', async () => {
+  // Dallas sat inside the 2024 umbra, which was about 190 km across there. At
+  // zoom 4 on this viewport a degree is sixteen pixels, so the band is a good
+  // twenty pixels tall and a sample across it must find the fill on both
+  // sides of the axis and nothing a hundred kilometres beyond it.
+  await apply('?t=2024-04-08T18:42:00Z&play=off&tz=UTC&z=4&lon=-97&lat=33&layers=')
+  const column = await page.evaluate(() => {
+    const [x, y] = window.__heliograph!.locate(-96.8, 32.78)
+    const canvas = document.querySelector('.overlay') as HTMLCanvasElement
+    const data = canvas.getContext('2d')!.getImageData(Math.round(x), Math.round(y) - 60, 1, 121).data
+    const warm: number[] = []
+    for (let i = 0; i < 121; i++) {
+      const o = i * 4
+      if (data[o + 3]! > 40 && data[o]! > 150 && data[o + 2]! < 140) warm.push(i - 60)
+    }
+    return warm
+  })
+  const above = column.filter((d) => d < -3).length
+  const below = column.filter((d) => d > 3).length
+  expect(above).toBeGreaterThan(3)
+  expect(below).toBeGreaterThan(3)
+  // And it stops: nothing fifty pixels out, which is three hundred kilometres.
+  expect(column.some((d) => Math.abs(d) > 50)).toBe(false)
+})
+
+test('a lunar eclipse draws the half of the world that can see it', async () => {
+  // Mid totality on 7 September 2025. The Moon was overhead in the Indian
+  // Ocean, so the rim of the visible hemisphere runs through the Pacific and
+  // the Atlantic and nowhere near the sublunar point itself.
+  await apply('?t=2025-09-07T18:11:00Z&play=off&tz=UTC&z=1&lon=80&lat=0&layers=moon')
+  const count = await page.evaluate(() => {
+    const canvas = document.querySelector('.overlay') as HTMLCanvasElement
+    const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
+    let pale = 0
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3]! > 120 && data[i]! > 150 && Math.abs(data[i]! - data[i + 2]!) < 30) pale++
+    }
+    return pale
+  })
+  expect(count).toBeGreaterThan(300)
+  // The Moon itself is drawn copper, not white, while it is in the umbra.
+  const glyph = await sampleOverlayAt(86.73, -6.0)
+  expect(glyph[0]).toBeGreaterThan(glyph[2] + 60)
+  // A day later, no rim and an ordinary Moon.
+  await apply('?t=2025-09-08T18:11:00Z&play=off&tz=UTC&z=1&lon=80&lat=0&layers=moon')
+  const after = await page.evaluate(() => {
+    const canvas = document.querySelector('.overlay') as HTMLCanvasElement
+    const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
+    let pale = 0
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3]! > 120 && data[i]! > 150 && Math.abs(data[i]! - data[i + 2]!) < 30) pale++
+    }
+    return pale
+  })
+  expect(after).toBeLessThan(count / 4)
+})
+
+test('the Moon glyph shows the right phase', async () => {
+  // A waxing gibbous Moon, 85 percent lit: most of the disc should be bright.
+  // The terminator used to be traced the wrong way round, which drew this as
+  // a thin crescent and a full Moon as nothing.
+  await apply('?t=2026-08-26T12:00:00Z&play=off&tz=UTC&z=1&lon=0&lat=0&layers=moon')
+  const lit = await page.evaluate(() => {
+    const h = window.__heliograph!
+    const canvas = document.querySelector('.overlay') as HTMLCanvasElement
+    const context = canvas.getContext('2d')!
+    const moon = h.sublunar()
+    const [x, y] = h.locate(moon.lon, moon.lat)
+    const data = context.getImageData(Math.round(x) - 7, Math.round(y) - 7, 15, 15).data
+    let bright = 0
+    let dark = 0
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3]! < 100) continue
+      if (data[i]! > 180) bright++
+      else dark++
+    }
+    return { bright, dark }
+  })
+  expect(lit.bright).toBeGreaterThan(lit.dark)
+})
+
 test('the almanac opens closed, and can always be closed again', async () => {
   // A panel that covers the map must not restore itself, and must be closable
   // from inside itself: remembering it was open left a returning visitor on a
@@ -525,6 +617,23 @@ test('the almanac lists eclipses and jumps to one', async () => {
   // The short list goes up at once and the long one fills in behind it, so
   // there is a run of them to scroll rather than a handful.
   await expect.poll(() => page.locator('.almanac-eclipse').count(), { timeout: 15_000 }).toBeGreaterThan(24)
+
+  // Every solar row says what the pinned place will see of it, and which of
+  // the lunar outcomes applies: the August 2027 eclipse over Egypt takes a
+  // fifth of the Sun as seen from Oslo, in the morning there.
+  const egyptRow = listed.find((row) => row.includes('02 AUG 2027'))
+  expect(egyptRow).toMatch(/From Oslo: \d+% covered at (09|10|11):\d\d/)
+  const lunarRow = listed.find((row) => row.includes('Total lunar'))
+  expect(lunarRow).toMatch(/Moon (\d+\.\d° up|below the horizon|rising or setting)/)
+
+  // The filter keeps only what can be seen from here.
+  await page.locator('[data-almanac-visible]').check()
+  await expect.poll(() => page.locator('.almanac-eclipse').allTextContents()).not.toContain(expect.stringContaining('Not visible'))
+  const visibleOnly = await page.locator('.almanac-eclipse button').allTextContents()
+  expect(visibleOnly.length).toBeGreaterThan(3)
+  expect(visibleOnly.every((row) => !row.includes('Not visible'))).toBe(true)
+  await page.locator('[data-almanac-visible]').uncheck()
+  await expect.poll(() => page.locator('.almanac-eclipse').count()).toBeGreaterThan(visibleOnly.length)
 
   await page.locator('.almanac-eclipse button').first().click()
   await expect(page.locator('[data-date]')).toHaveText('SAT 06 FEB 2027')

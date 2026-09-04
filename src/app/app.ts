@@ -30,7 +30,7 @@ import {
   type SolarState,
 } from '../solar/solar.ts'
 import { moonlight, moonPhase, moonState, type MoonPhase, type MoonState } from '../solar/moon.ts'
-import { centralPath, shadowUniforms, type EclipseTrack } from '../solar/eclipse.ts'
+import { centralPath, lunarShadowNow, shadowUniforms, type EclipseTrack } from '../solar/eclipse.ts'
 import { isValidZone, listZones, localZone, wallClockToUtc, zoneOffsetMinutes } from '../time/timezone.ts'
 import terrainUrl from '../assets/terrain.webp'
 import terrainSeasonUrl from '../assets/terrain-season.webp'
@@ -133,6 +133,15 @@ const TEMPLATE = /* html */ `
     <div data-layer-list></div>
     <p class="micro panel-title panel-title-spaced">Twilight</p>
     <ul class="legend" data-legend></ul>
+    <p class="micro panel-title panel-title-spaced keys-title">Keys</p>
+    <dl class="keys">
+      <div><dt><kbd>Space</kbd></dt><dd>Play or pause</dd></div>
+      <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>An hour back or forward, a day with <kbd>Shift</kbd></dd></div>
+      <div><dt><kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd></dt><dd>Zoom in, out, and back to the world</dd></div>
+      <div><dt><kbd>/</kbd></dt><dd>Find a place or a zone</dd></div>
+      <div><dt><kbd>A</kbd> <kbd>L</kbd></dt><dd>Almanac, layers</dd></div>
+      <div><dt><kbd>?</kbd></dt><dd>This list</dd></div>
+    </dl>
   </div>
 </main>
 
@@ -147,6 +156,7 @@ const TEMPLATE = /* html */ `
       <p class="clock-time numeric" data-time>—</p>
       <p class="clock-zone micro" data-zone>—</p>
     </section>
+    <p class="peek" data-peek>—</p>
 
     <section class="transport">
       <div class="transport-row">
@@ -445,6 +455,12 @@ export class Heliograph {
   }
 
   /** Where a place sits on screen right now, in CSS pixels. */
+  /** Where the Moon is overhead, for the tests. */
+  sublunar(): { lon: number; lat: number } {
+    const { state } = this.moonNow()
+    return { lon: state.sublunarLon, lat: state.sublunarLat }
+  }
+
   locate(lon: number, lat: number): [number, number] {
     return project(this.size, this.view, lon, lat)
   }
@@ -606,7 +622,12 @@ export class Heliograph {
       const item = document.createElement('li')
       const swatch = document.createElement('span')
       swatch.className = 'legend-swatch'
-      swatch.style.background = linearRgbToHex(sampleSurfaceRamp('ocean', entry.elevation))
+      // Half ground, half water, exactly as the map paints them at that
+      // elevation: a legend of one surface's blues said nothing about the gold
+      // that the land goes at the same moment.
+      const land = linearRgbToHex(sampleSurfaceRamp('land', entry.elevation))
+      const ocean = linearRgbToHex(sampleSurfaceRamp('ocean', entry.elevation))
+      swatch.style.background = `linear-gradient(90deg, ${land} 0 50%, ${ocean} 50% 100%)`
       const label = document.createElement('span')
       label.className = 'legend-label'
       label.textContent = entry.label
@@ -1230,6 +1251,7 @@ export class Heliograph {
           break
         case 'l':
         case 'L':
+        case '?':
           this.q<HTMLButtonElement>('[data-layers-toggle]').click()
           break
         case 'a':
@@ -1451,6 +1473,7 @@ export class Heliograph {
       lakes: this.layers.lakes ?? true,
     }
     const moon = this.moonNow()
+    const lunar = this.lunarFrame()
     const frame: Frame = {
       view: this.view,
       size: this.size,
@@ -1494,9 +1517,11 @@ export class Heliograph {
             lat: moon.state.sublunarLat,
             illumination: moon.phase.illumination,
             waxing: moon.phase.waxing,
+            eclipsed: lunar?.inUmbra ?? false,
           }
         : null,
       eclipsePath: this.track,
+      lunarEclipse: lunar,
       localTime: this.layers.localTime ?? false,
       hover: this.hover,
       pinned: this.focus ? { lon: this.focus.lon, lat: this.focus.lat, label: this.focus.name } : null,
@@ -1587,6 +1612,12 @@ export class Heliograph {
     this.q('[data-place-set]').textContent =
       events.polar ? '—' : formatEventTime(zone, events.sunset)
     this.q('[data-place-daylight]').textContent = formatDuration(events.dayLength)
+
+    // The one line a phone shows without being asked: where, and when the
+    // light comes and goes there. Everything else waits behind the grip.
+    const rise =
+      events.polar === 'day' ? 'sun up all day' : events.polar === 'night' ? 'sun down all day' : `rise ${formatEventTime(zone, events.sunrise)} · set ${formatEventTime(zone, events.sunset)}`
+    this.q('[data-peek]').textContent = `${name || 'Open water'} · ${rise} · ${formatElevation(local.elevation)}`
 
     if (this.focus) {
       this.almanac.update(
@@ -1722,6 +1753,15 @@ export class Heliograph {
     const thousand = (v: readonly [number, number, number]) =>
       [v[0] / 1000, v[1] / 1000, v[2] / 1000] as const
     return { sun: thousand(shadow.sun), moon: thousand(shadow.moon), gmst: shadow.siderealDegrees }
+  }
+
+  /**
+   * The half of the world that can see an eclipsed Moon, while there is one.
+   * Answered from the geometry every frame because the check is a dozen
+   * multiplications on positions the frame has already paid for.
+   */
+  private lunarFrame(): { lon: number; lat: number; inUmbra: boolean } | null {
+    return lunarShadowNow(this.time)
   }
 
   // --------------------------------------------------------------- local time
@@ -1885,7 +1925,9 @@ export class Heliograph {
       if (place) {
         this.view = clampView(this.size, { centerLon: place.lon, centerLat: place.lat, zoom: Math.max(this.view.zoom, 2.5) })
       }
-      this.setTime(time)
+      // A place may carry its own moment: the deepest point of the eclipse as
+      // seen from there, which is what the reader wants to look at.
+      this.setTime(place?.time ?? time)
       this.draw()
     }
 
@@ -2062,7 +2104,12 @@ export class Heliograph {
     const phase = moonPhase(solarState(this.time), state)
     // moonlight() takes the altitude of the Moon at the place being lit, and the
     // shader supplies that per pixel, so the gain is quoted at the zenith.
-    const gain = moonlight(90, phase, state.distanceKm)
+    let gain = moonlight(90, phase, state.distanceKm)
+    // A Moon inside the Earth's umbra is lit only by the light refracted round
+    // the Earth, some ten thousand times fainter; in the penumbra it merely
+    // dims. So the night side loses its moonlight exactly when the Moon does.
+    const shadow = lunarShadowNow(this.time)
+    if (shadow) gain *= shadow.inUmbra ? 0.005 : 0.5
     this.moonCache = { time: this.time, state, phase, gain }
     return this.moonCache
   }

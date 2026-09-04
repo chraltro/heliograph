@@ -91,6 +91,11 @@ hours, solar noon, how much longer today is than yesterday, the Moon's phase and
 rise and set, and a chart of the daylight across the whole year with today
 ruled on it. Somewhere above sixty degrees in summer the first and last light
 simply stop happening, and the almanac says so rather than inventing a time.
+There is also a chart of the sky itself, the oldest diagram in the subject:
+the Sun's bearing along the bottom, its height up the side, today's path drawn
+across it with the hours marked, the two solstice paths in grey as the envelope
+it never leaves, and the Moon's path dashed beside it. It answers which window
+the sun comes in at breakfast and how low it stays at noon in December.
 
 **The Moon.** Its position follows Meeus chapters 47 and 48 in full, all one
 hundred and twenty periodic terms, which holds it to about ten arcseconds. It is
@@ -111,12 +116,24 @@ strung along the Tropic of Capricorn.
 
 **Eclipses.** The almanac lists the eclipses to come, solar and lunar, searched
 out of the geometry rather than read from a table, so the horizon is a century
-and the limit is patience rather than data. Pick one and the map goes to the
-instant of greatest eclipse, where the Moon's shadow is drawn on the ground:
-the real umbra and penumbra, worked out per pixel, because the Moon is close
-enough that two observers a few hundred kilometres apart see it against
-measurably different sky. That is why totality is a track a hundred kilometres
-wide and not a hemisphere.
+and the limit is patience rather than data. Only the ones worth looking up for
+are listed: total and annular solar, total lunar. Each solar eclipse is placed
+against the nearest city a reader has heard of, with a bearing, because nobody
+knows where 19°S 132°W is; and every row says what the pinned place will see
+of it, which is the question people actually ask: "From Copenhagen: 83% covered
+at 20:03", or "Not visible from here", with a filter to keep only the ones that
+are. Pick a row and the map goes to the moment that matters where you stand.
+
+On the map, a solar eclipse is a line, not a spot. The shadow axis is walked
+through the hours around greatest eclipse and the path of totality drawn as a
+band of its true width, a hundred to three hundred kilometres, worked from the
+umbral cone and the slant of the light, with the hours of Universal Time marked
+along it so the shadow's speed can be seen. Under it, the ground darkens per
+pixel with the real umbra and penumbra, because the Moon is close enough that
+two observers a few hundred kilometres apart see it against measurably
+different sky. A lunar eclipse draws the half of the world that can see the
+Moon at all, the Moon itself turns copper while it is in the umbra, and the
+moonlight on the night side goes out with it.
 
 **On a phone.** The map is the whole screen. The rail floats over its top edge
 and the console folds into a bottom sheet that peeks the clock and the day
@@ -157,6 +174,7 @@ Everything is in the address bar, so any view can be linked to:
 | `+`, `-` | Zoom |
 | `0` | Reset the view |
 | `L` | Layers |
+| `?` | The key list |
 
 <img src="docs/images/heliograph-phone.png" alt="The same map on a phone" width="300">
 

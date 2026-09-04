@@ -2,6 +2,9 @@ import { describe, expect, test } from 'vitest'
 import {
   centralPath,
   findEclipses,
+  localLunarCircumstances,
+  localSolarCircumstances,
+  lunarShadowNow,
   obscurationAt,
   geometry,
   solarEclipseNear,
@@ -172,11 +175,70 @@ describe('the catalogue', () => {
       expect(swept).toBeGreaterThan(60)
     })
 
+    test('knows how wide the shadow is', () => {
+      // Published umbral widths: 2017 about 115 km at Charleston, 2024 about
+      // 190 km at Dallas. The radius is across the cone; the ground width is
+      // roughly twice it where the Sun is high.
+      const closest = (path: ReturnType<typeof centralPath>, lon: number, lat: number) =>
+        path.central.reduce((best, p) =>
+          Math.hypot(p.lon - lon, p.lat - lat) < Math.hypot(best.lon - lon, best.lat - lat) ? p : best,
+        )
+      const charleston = closest(centralPath(utc('2017-08-21T18:26:00Z')), -79.93, 32.78)
+      expect(charleston.radiusKm * 2).toBeGreaterThan(95)
+      expect(charleston.radiusKm * 2).toBeLessThan(125)
+      expect(charleston.elevation).toBeGreaterThan(55)
+      const dallas = closest(centralPath(utc('2024-04-08T18:18:00Z')), -96.8, 32.78)
+      expect(dallas.radiusKm * 2).toBeGreaterThan(170)
+      expect(dallas.radiusKm * 2).toBeLessThan(205)
+    })
+
     test('gives a partial eclipse no track at all', () => {
       // 2025-03-29 is partial everywhere: the axis passes north of the Earth.
       const path = centralPath(utc('2025-03-29T10:47:00Z'))
       expect(path.type).toBe('partial')
       expect(path.central.length).toBe(0)
+    })
+  })
+
+  /**
+   * What a place sees. New York on 8 April 2024 had ninety percent of the Sun
+   * covered at 15:25 EDT; Copenhagen saw nothing of it at all. Both are widely
+   * published and neither is close to a boundary of the arithmetic.
+   */
+  describe('from one place', () => {
+    test('New York saw ninety percent of the 2024 eclipse at 15:25', () => {
+      const eclipse = solarEclipseNear(utc('2024-04-08T18:18:00Z'))
+      const local = localSolarCircumstances(eclipse, -74.0, 40.71)
+      expect(local.obscuration).toBeGreaterThan(0.87)
+      expect(local.obscuration).toBeLessThan(0.93)
+      expect(Math.abs(local.peak - utc('2024-04-08T19:25:00Z')) / MS_PER_MINUTE).toBeLessThan(5)
+    })
+
+    test('Copenhagen saw none of it, and is told so', () => {
+      const eclipse = solarEclipseNear(utc('2024-04-08T18:18:00Z'))
+      expect(localSolarCircumstances(eclipse, 12.57, 55.68).obscuration).toBe(0)
+    })
+
+    test('the total lunar eclipse of September 2025 rose eclipsed over Europe and was missed by America', () => {
+      const eclipse = lunarEclipseNear(utc('2025-09-07T18:12:00Z'))
+      expect(eclipse.type).toBe('total')
+      const copenhagen = localLunarCircumstances(eclipse, 12.57, 55.68)
+      expect(copenhagen.visible).toBe(true)
+      expect(copenhagen.elevation).toBeGreaterThan(0)
+      expect(copenhagen.elevation).toBeLessThan(10)
+      const newYork = localLunarCircumstances(eclipse, -74.0, 40.71)
+      expect(newYork.visible).toBe(false)
+      expect(newYork.partly).toBe(false)
+    })
+
+    test('the Moon is reported in the shadow only while it is there', () => {
+      const eclipse = lunarEclipseNear(utc('2025-09-07T18:12:00Z'))
+      const inside = lunarShadowNow(eclipse.time)
+      expect(inside).not.toBeNull()
+      expect(inside!.inUmbra).toBe(true)
+      // The whole eclipse, penumbral contact to last contact, is under six hours.
+      expect(lunarShadowNow(eclipse.time + 4 * 3_600_000)).toBeNull()
+      expect(lunarShadowNow(eclipse.time + MS_PER_DAY)).toBeNull()
     })
   })
 

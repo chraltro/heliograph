@@ -67,10 +67,12 @@ export interface OverlayFrame {
   highlightZones: ReadonlySet<number>
   /** Subsolar track over the year, as lon and lat pairs. */
   analemma: Array<{ lon: number; lat: number }> | null
-  /** Where the Moon stands overhead, and how much of it is lit. */
-  moon: { lon: number; lat: number; illumination: number; waxing: boolean } | null
+  /** Where the Moon stands overhead, how much of it is lit, and whether it is in the Earth's umbra. */
+  moon: { lon: number; lat: number; illumination: number; waxing: boolean; eclipsed: boolean } | null
   /** The ground track of the Moon's shadow, when an eclipse is under way. */
   eclipsePath: EclipseTrack | null
+  /** Where the Moon is overhead while it is inside the Earth's shadow. */
+  lunarEclipse: { lon: number; lat: number; inUmbra: boolean } | null
   /**
    * True when every zone is drawn at its own clock rather than one instant.
    * The subsolar point and the twilight circles describe a single instant, so
@@ -92,6 +94,8 @@ interface Box {
 
 const RAD = Math.PI / 180
 const MS_PER_HOUR = 3600_000
+/** A totally eclipsed Moon, as photographed: a dull red-brown, never black. */
+const ECLIPSED_MOON = '#b4532c'
 
 export class MapOverlay {
   private readonly ctx: CanvasRenderingContext2D
@@ -138,6 +142,7 @@ export class MapOverlay {
     if (frame.layers.analemma && frame.analemma) this.drawAnalemma(frame)
     if (frame.layers.boundaries && !frame.localTime) this.drawTwilightBoundaries(frame)
     if (frame.eclipsePath && !frame.localTime) this.drawEclipsePath(frame, frame.eclipsePath)
+    if (frame.lunarEclipse && !frame.localTime) this.drawLunarVisibility(frame, frame.lunarEclipse)
     if (!frame.localTime) this.drawSubsolar(frame)
     if (frame.moon) this.drawSublunar(frame, frame.moon)
     if (frame.layers.timezones) this.drawZoneLabels(frame)
@@ -507,13 +512,18 @@ export class MapOverlay {
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
 
+      // The band first: the umbra at its true width, so that zooming in shows
+      // the hundred-odd kilometres that actually go dark, and a town on the
+      // edge of it can see which side it is on.
+      this.fillUmbraBand(frame, track, colour)
+
       ctx.globalAlpha *= 0.85
       ctx.strokeStyle = INK[0]
-      ctx.lineWidth = 5.5
+      ctx.lineWidth = 4
       this.strokeGeoPath(frame, points, false)
 
       ctx.strokeStyle = colour
-      ctx.lineWidth = 2.2
+      ctx.lineWidth = 1.5
       this.strokeGeoPath(frame, points, false)
 
       // One mark per whole hour of Universal Time, found by watching the hour
@@ -561,6 +571,103 @@ export class MapOverlay {
   }
 
   /**
+   * The umbra as a band of its real width.
+   *
+   * The shadow on the ground is the cone's circle stretched along the Sun's
+   * bearing by the slant of the light, so near sunrise and sunset it is a long
+   * ellipse and at noon nearly round. What the band needs is the extent of
+   * that ellipse across the direction of travel, which is the support function
+   * of the ellipse in the track's normal, and a couple of lines of algebra.
+   * Each sample gets two edge points a little way either side of the axis,
+   * and consecutive pairs make quads, each one small enough that the
+   * antimeridian can simply skip it.
+   */
+  private fillUmbraBand(frame: OverlayFrame, track: EclipseTrack, colour: string): void {
+    const { ctx } = this
+    const w = worldWidth(frame.size, frame.view)
+    const KM_PER_DEGREE = 111.32
+    const edges: Array<[[number, number], [number, number]] | null> = []
+
+    for (let i = 0; i < track.central.length; i++) {
+      const point = track.central[i]!
+      const ahead = track.central[Math.min(i + 1, track.central.length - 1)]!
+      const behind = track.central[Math.max(i - 1, 0)]!
+      // Direction of travel in kilometres, east and north.
+      const cosLat = Math.cos(point.lat * RAD)
+      let de = (((ahead.lon - behind.lon + 540) % 360) - 180) * KM_PER_DEGREE * cosLat
+      let dn = (ahead.lat - behind.lat) * KM_PER_DEGREE
+      const along = Math.hypot(de, dn)
+      if (along === 0 || point.elevation <= 0.5) {
+        edges.push(null)
+        continue
+      }
+      de /= along
+      dn /= along
+      // The normal to the track, and the ellipse's own axes: its long axis
+      // lies along the Sun's bearing, stretched by one over the sine of the
+      // Sun's altitude.
+      const ne = -dn
+      const nn = de
+      const ue = Math.sin(point.azimuth * RAD)
+      const un = Math.cos(point.azimuth * RAD)
+      const a = point.radiusKm / Math.max(0.12, Math.sin(point.elevation * RAD))
+      const b = point.radiusKm
+      const dotU = ne * ue + nn * un
+      const dotV = ne * -un + nn * ue
+      const half = Math.sqrt(a * a * dotU * dotU + b * b * dotV * dotV)
+      const dLon = (half * ne) / (KM_PER_DEGREE * cosLat)
+      const dLat = (half * nn) / KM_PER_DEGREE
+      edges.push([
+        project(frame.size, frame.view, point.lon + dLon, point.lat + dLat),
+        project(frame.size, frame.view, point.lon - dLon, point.lat - dLat),
+      ])
+    }
+
+    ctx.save()
+    ctx.fillStyle = colour
+    ctx.globalAlpha *= 0.28
+    for (const offset of [-w, 0, w]) {
+      if (offset !== 0 && w >= frame.size.width * 3) continue
+      ctx.beginPath()
+      for (let i = 1; i < edges.length; i++) {
+        const from = edges[i - 1]
+        const to = edges[i]
+        if (!from || !to) continue
+        // A pair that straddles the antimeridian projects to opposite ends of
+        // the plate; the segment between them is not worth drawing.
+        if (Math.abs(to[0][0] - from[0][0]) > w / 2) continue
+        ctx.moveTo(from[0][0] + offset, from[0][1])
+        ctx.lineTo(to[0][0] + offset, to[0][1])
+        ctx.lineTo(to[1][0] + offset, to[1][1])
+        ctx.lineTo(from[1][0] + offset, from[1][1])
+        ctx.closePath()
+      }
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  /**
+   * The half of the world that can see a lunar eclipse.
+   *
+   * A lunar eclipse has no track: the Moon is in the shadow for everybody at
+   * once, and the only question is who has it above the horizon. That is a
+   * hemisphere centred on the sublunar point, drawn as its rim so the map
+   * underneath stays legible, and dashed so it cannot be mistaken for the
+   * terminator it runs close to.
+   */
+  private drawLunarVisibility(frame: OverlayFrame, moon: { lon: number; lat: number; inUmbra: boolean }): void {
+    const { ctx } = this
+    ctx.save()
+    ctx.strokeStyle = moon.inUmbra ? INK[700] : INK[500]
+    ctx.lineWidth = this.hairline * 1.4 * this.dpr
+    ctx.globalAlpha *= moon.inUmbra ? 0.75 : 0.45
+    ctx.setLineDash([6, 5])
+    this.strokeGeoPath(frame, MapOverlay.smallCircle(moon.lat, moon.lon, 90), true)
+    ctx.restore()
+  }
+
+  /**
    * The sublunar point, drawn as the Moon actually looks tonight.
    *
    * The terminator on a real lunar disc is a half ellipse, not an offset
@@ -571,7 +678,7 @@ export class MapOverlay {
    */
   private drawSublunar(
     frame: OverlayFrame,
-    moon: { lon: number; lat: number; illumination: number; waxing: boolean },
+    moon: { lon: number; lat: number; illumination: number; waxing: boolean; eclipsed: boolean },
   ): void {
     const { ctx } = this
     const w = worldWidth(frame.size, frame.view)
@@ -595,14 +702,19 @@ export class MapOverlay {
       // semi-minor axis is how far that boundary sits from the centre.
       const k = Math.min(1, Math.max(0, moon.illumination))
       const waxing = moon.waxing
-      ctx.fillStyle = INK[800]
+      // Inside the umbra the Moon is lit only by the light the atmosphere bends
+      // round the Earth, which is every sunset at once, and it goes copper.
+      ctx.fillStyle = moon.eclipsed ? ECLIPSED_MOON : INK[800]
       ctx.beginPath()
       // The limb: the half of the circle on the lit side.
       const from = waxing ? -Math.PI / 2 : Math.PI / 2
       ctx.arc(0, 0, radius, from, from + Math.PI, false)
-      // The terminator: an ellipse of the same height, bulging toward the lit
-      // limb when gibbous and away from it when crescent.
-      ctx.ellipse(0, 0, radius * Math.abs(2 * k - 1), radius, 0, from + Math.PI, from, k > 0.5)
+      // The terminator: an ellipse of the same height. Gibbous, the path
+      // carries on round the far side of the disc and the ellipse bulges away
+      // from the limb; crescent, it turns back through the same half and
+      // encloses only the sliver between the limb and the ellipse. Getting
+      // that flag the wrong way round draws a full Moon as nothing at all.
+      ctx.ellipse(0, 0, radius * Math.abs(2 * k - 1), radius, 0, from + Math.PI, from, k < 0.5)
       ctx.fill()
 
       ctx.strokeStyle = INK[400]

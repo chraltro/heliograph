@@ -12,8 +12,8 @@
  * so the map can show the shadow moving rather than only listing dates.
  */
 
-import { moonState, siderealTime, type MoonState } from './moon.ts'
-import { MS_PER_DAY, MS_PER_HOUR, MS_PER_MINUTE, solarState, wrapLon, type SolarState } from './solar.ts'
+import { moonElevationAt, moonState, siderealTime, type MoonState } from './moon.ts'
+import { localSolar, MS_PER_DAY, MS_PER_HOUR, MS_PER_MINUTE, solarState, wrapLon, type SolarState } from './solar.ts'
 
 const DEG = Math.PI / 180
 const RAD = 180 / Math.PI
@@ -388,9 +388,24 @@ export function findEclipses(from: number, to: number): Eclipse[] {
   return found
 }
 
+export interface TrackPoint {
+  readonly lon: number
+  readonly lat: number
+  readonly time: number
+  /**
+   * Radius of the umbra, or of the antumbra for an annular eclipse, where the
+   * axis meets the ground, in kilometres and measured across the cone. The
+   * shadow on the ground is that circle stretched by the Sun's slant.
+   */
+  readonly radiusKm: number
+  /** Where the Sun stands in the sky at that point, degrees. */
+  readonly elevation: number
+  readonly azimuth: number
+}
+
 export interface EclipseTrack {
   /** Where the shadow axis meets the ground, in order through the eclipse. */
-  readonly central: Array<{ lon: number; lat: number; time: number }>
+  readonly central: TrackPoint[]
   /** The point of greatest eclipse, which lies on that line. */
   readonly greatest: { lon: number; lat: number } | null
   readonly type: SolarEclipse['type']
@@ -413,14 +428,109 @@ export interface EclipseTrack {
  */
 export function centralPath(nearTime: number, stepMinutes = 3): EclipseTrack {
   const eclipse = solarEclipseNear(nearTime)
-  const central: Array<{ lon: number; lat: number; time: number }> = []
+  const central: TrackPoint[] = []
   const step = stepMinutes * MS_PER_MINUTE
   // Four hours either side covers the longest track the geometry allows.
   for (let t = eclipse.time - 4 * MS_PER_HOUR; t <= eclipse.time + 4 * MS_PER_HOUR; t += step) {
-    const { hit } = axisApproach(geometry(t))
-    if (hit) central.push({ ...toGround(t, hit), time: t })
+    const geo = geometry(t)
+    const { hit } = axisApproach(geo)
+    if (!hit) continue
+    const ground = toGround(t, hit)
+    // The umbral cone narrows from the Moon at the rate the Sun's limb
+    // converges on it, so its radius at the ground is a similar triangle;
+    // past the apex it opens again as the antumbra, which is the annular case.
+    const along = length(sub(hit, geo.moon))
+    const cone = MOON_RADIUS - (along * (SUN_RADIUS - MOON_RADIUS)) / length(sub(geo.sun, geo.moon))
+    const sky = localSolar(ground.lat, ground.lon, geo.sunState)
+    central.push({
+      ...ground,
+      time: t,
+      radiusKm: Math.abs(cone),
+      elevation: sky.elevation,
+      azimuth: sky.azimuth,
+    })
   }
   return { central, greatest: eclipse.greatest, type: eclipse.type, time: eclipse.time }
+}
+
+export interface LocalSolarCircumstances {
+  /** The most of the Sun's area hidden at any moment, 0 when none of it is. */
+  readonly obscuration: number
+  /** When that happens. */
+  readonly peak: number
+}
+
+/**
+ * What one place sees of a solar eclipse: how deep it gets there and when.
+ *
+ * This is the question everybody actually asks. The catalogue answer — greatest
+ * eclipse over the Pacific at 18:26 — says nothing about whether it is worth
+ * stepping outside in Copenhagen, and the difference between a three percent
+ * bite and a ninety percent one is the difference between nothing and the sky
+ * going strange. The scan is coarse and then refined, and the refinement is
+ * bracketed on the coarse peak so it cannot wander off to a second lobe.
+ */
+export function localSolarCircumstances(eclipse: SolarEclipse, lon: number, lat: number): LocalSolarCircumstances {
+  const at = (t: number) => obscurationAt(geometry(t), lon, lat)
+  let peak = eclipse.time
+  let best = 0
+  const step = 6 * MS_PER_MINUTE
+  for (let t = eclipse.time - 4 * MS_PER_HOUR; t <= eclipse.time + 4 * MS_PER_HOUR; t += step) {
+    const value = at(t)
+    if (value > best) {
+      best = value
+      peak = t
+    }
+  }
+  if (best === 0) return { obscuration: 0, peak }
+  const refined = goldenSection((t) => -at(t), peak - step, peak + step, 24)
+  return { obscuration: at(refined), peak: refined }
+}
+
+export interface LocalLunarCircumstances {
+  /** The Moon's altitude at greatest eclipse, degrees. */
+  readonly elevation: number
+  /** Up at greatest eclipse. */
+  readonly visible: boolean
+  /** Up at some point during the umbral phases, if not at the middle. */
+  readonly partly: boolean
+}
+
+/**
+ * Whether a lunar eclipse can be seen from a place, which is only a question of
+ * whether the Moon is above the horizon: the eclipse itself looks the same from
+ * everywhere that can see the Moon at all. The umbral phases of a total eclipse
+ * run an hour and a half either side of the middle, so a place where the Moon
+ * rises or sets inside that window still gets part of the show.
+ */
+export function localLunarCircumstances(eclipse: LunarEclipse, lon: number, lat: number): LocalLunarCircumstances {
+  const up = (t: number) => moonElevationAt(lat, lon, moonState(t))
+  const elevation = up(eclipse.time)
+  const visible = elevation > -0.5
+  const partly = !visible && (up(eclipse.time - 1.5 * MS_PER_HOUR) > -0.5 || up(eclipse.time + 1.5 * MS_PER_HOUR) > -0.5)
+  return { elevation, visible, partly }
+}
+
+/**
+ * Whether the Moon is inside the Earth's shadow at an instant, and where it is
+ * overhead if so. Cheap enough to ask every frame: the map wants to draw the
+ * half of the world that can see an eclipsed Moon, and only while there is one.
+ */
+export function lunarShadowNow(time: number): { lon: number; lat: number; inUmbra: boolean } | null {
+  const geo = geometry(time)
+  const direction = normalise(scale(geo.sun, -1))
+  const along = dot(geo.moon, direction)
+  if (along <= 0) return null
+  const miss = length(sub(geo.moon, scale(direction, along)))
+  const sunDistance = length(geo.sun)
+  const umbra = 1.02 * (EARTH_RADIUS - (along * (SUN_RADIUS - EARTH_RADIUS)) / sunDistance)
+  const penumbra = 1.02 * (EARTH_RADIUS + (along * (SUN_RADIUS + EARTH_RADIUS)) / sunDistance)
+  if (miss - MOON_RADIUS >= penumbra) return null
+  return {
+    lon: geo.moonState.sublunarLon,
+    lat: geo.moonState.sublunarLat,
+    inUmbra: miss - MOON_RADIUS < umbra,
+  }
 }
 
 /**

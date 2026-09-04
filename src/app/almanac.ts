@@ -18,8 +18,16 @@ import {
   seasonInstant,
   solarState,
   type DayEvents,
+  type SolarState,
 } from '../solar/solar.ts'
-import { describeEclipse, nextEclipses, worthSeeing, type Eclipse } from '../solar/eclipse.ts'
+import {
+  describeEclipse,
+  localLunarCircumstances,
+  localSolarCircumstances,
+  nextEclipses,
+  worthSeeing,
+  type Eclipse,
+} from '../solar/eclipse.ts'
 import {
   formatAzimuth,
   formatDate,
@@ -39,6 +47,27 @@ export interface AlmanacSite {
   country: string
   /** The zone the times are told in. */
   zone: string
+}
+
+/** What one place sees of one eclipse, ready to print. */
+interface LocalView {
+  visible: boolean
+  /** Worth stepping outside for: more than half the Sun, or the Moon well up. */
+  strong: boolean
+  text: string
+  /** Where the map should go when the row is picked, and optionally when. */
+  jumpTo: { lon: number; lat: number; time?: number } | null
+}
+
+interface SkyPoint {
+  time: number
+  azimuth: number
+  altitude: number
+}
+
+interface SkyCurve {
+  name: 'today' | 'june' | 'december' | 'moon'
+  points: SkyPoint[]
 }
 
 /** One row of the timetable. */
@@ -63,6 +92,9 @@ const ECLIPSE_FIRST = 8
 const ECLIPSE_COUNT = 40
 
 const CHART_HEIGHT = 132
+const SKY_HEIGHT = 128
+/** The chart runs from a little below the horizon to the zenith. */
+const SKY_FLOOR = -24
 /** Days between samples on the year chart. Sunrise moves smoothly enough. */
 const CHART_STEP_DAYS = 3
 
@@ -72,16 +104,22 @@ export class Almanac {
   private readonly moonList: HTMLElement
   private readonly title: HTMLElement
   private readonly chart: HTMLCanvasElement
+  private readonly sky: HTMLCanvasElement
+  private skyCache: { key: string; curves: SkyCurve[] } | null = null
   private readonly chartCaption: HTMLElement
   private readonly eclipseList: HTMLElement
   private eclipses: Eclipse[] | null = null
   private eclipseSpan = { from: 0, count: 0, exhausted: false }
   private eclipseWanted = ECLIPSE_FIRST
   private growing = false
+  /** Only list what the pinned place can actually see. */
+  private onlyVisible = false
+  /** What each eclipse looks like from the pinned place, keyed by eclipse and site. */
+  private readonly circumstances = new Map<string, LocalView>()
   /** Asked to redraw, when something the panel wanted has finished arriving. */
   onRefresh: (() => void) | null = null
   /** Told the instant of an eclipse the viewer picked. */
-  onJump: ((time: number, place: { lon: number; lat: number } | null) => void) | null = null
+  onJump: ((time: number, place: { lon: number; lat: number; time?: number } | null) => void) | null = null
   /**
    * Turns a point into somewhere a reader has heard of. Coordinates are exact
    * and useless: nobody knows where 19°S 132°W is, and "off Polynesia" is the
@@ -113,18 +151,33 @@ export class Almanac {
           <dl class="almanac-rows" data-almanac-moon></dl>
         </div>
       </div>
+      <p class="micro almanac-heading almanac-heading-spaced">The sky today</p>
+      <canvas class="almanac-chart almanac-sky" data-almanac-sky></canvas>
+      <p class="almanac-caption micro">Where the Sun and Moon stand through the day, by compass bearing and height. Grey: the two solstices.</p>
       <p class="micro almanac-heading almanac-heading-spaced">Daylight through the year</p>
       <canvas class="almanac-chart" data-almanac-chart></canvas>
       <p class="almanac-caption micro" data-almanac-caption>—</p>
-      <p class="micro almanac-heading almanac-heading-spaced">Eclipses to come</p>
+      <div class="almanac-heading-row">
+        <p class="micro almanac-heading almanac-heading-spaced">Eclipses to come</p>
+        <label class="almanac-filter">
+          <input type="checkbox" data-almanac-visible />
+          <span>Visible from here</span>
+        </label>
+      </div>
       <ul class="almanac-eclipses" data-almanac-eclipses></ul>
     `
     this.title = this.q('[data-almanac-title]')
     this.sunList = this.q('[data-almanac-sun]')
     this.moonList = this.q('[data-almanac-moon]')
     this.chart = this.q('[data-almanac-chart]')
+    this.sky = this.q('[data-almanac-sky]')
     this.chartCaption = this.q('[data-almanac-caption]')
     this.eclipseList = this.q('[data-almanac-eclipses]')
+    this.q<HTMLInputElement>('[data-almanac-visible]').addEventListener('change', (event) => {
+      this.onlyVisible = (event.target as HTMLInputElement).checked
+      this.lastKey = ''
+      this.onRefresh?.()
+    })
     const ctx = this.chart.getContext('2d')
     if (!ctx) throw new Error('could not get a 2D context for the almanac chart')
     this.ctx = ctx
@@ -166,8 +219,9 @@ export class Almanac {
 
     this.fill(this.sunList, this.sunRows(site, time, events))
     this.fill(this.moonList, this.moonRows(site, time, moon, phase))
+    this.drawSky(site, time, sun, moon)
     this.drawChart(site, time)
-    this.fillEclipses(time)
+    this.fillEclipses(site, time)
   }
 
   private fill(list: HTMLElement, rows: Row[]): void {
@@ -231,7 +285,7 @@ export class Almanac {
    * or eats through most of what it holds. Picking one takes the map to the
    * instant of greatest eclipse, where the shadow itself is drawn on the ground.
    */
-  private fillEclipses(time: number): void {
+  private fillEclipses(site: AlmanacSite, time: number): void {
     const ahead = this.eclipses?.filter((e) => e.time >= time) ?? []
     const usable =
       this.eclipses !== null &&
@@ -268,12 +322,19 @@ export class Almanac {
     }
 
     this.eclipseList.textContent = ''
+    let shown = 0
     for (const eclipse of upcoming) {
+      const view = this.viewFrom(site, eclipse)
+      if (this.onlyVisible && !view.visible) continue
+      shown++
       const item = document.createElement('li')
       item.className = 'almanac-eclipse'
+      if (!view.visible) item.classList.add('is-unseen')
       const button = document.createElement('button')
       button.type = 'button'
-      const when = readingIn('UTC', eclipse.time)
+      // The date is the local one: an eclipse at 23:30 UTC is tomorrow's
+      // eclipse in Tokyo, and the reader is going to write it on a calendar.
+      const when = readingIn(site.zone, eclipse.time)
       const date = document.createElement('span')
       date.className = 'numeric'
       date.textContent = `${formatDate(when)}`
@@ -288,13 +349,76 @@ export class Almanac {
       detail.textContent = greatest
         ? (near ?? `${formatLatitude(greatest.lat)} ${formatLongitude(greatest.lon)}`)
         : `mag ${Math.max(0, eclipse.magnitude).toFixed(2)}`
-      button.append(date, kind, detail)
+      const local = document.createElement('span')
+      local.className = 'almanac-eclipse-local'
+      if (view.strong) local.classList.add('is-strong')
+      local.textContent = view.text
+      button.append(date, kind, detail, local)
       button.addEventListener('click', () => {
-        this.onJump?.(eclipse.time, eclipse.kind === 'solar' ? eclipse.greatest : null)
+        this.onJump?.(eclipse.time, view.jumpTo)
       })
       item.append(button)
       this.eclipseList.append(item)
     }
+    if (shown === 0) {
+      const item = document.createElement('li')
+      item.className = 'almanac-eclipse almanac-eclipse-empty'
+      item.textContent = this.onlyVisible
+        ? `None of the next ${upcoming.length} can be seen from ${site.name || 'here'}.`
+        : 'Nothing within the horizon.'
+      this.eclipseList.append(item)
+    }
+  }
+
+  /**
+   * One eclipse as seen from one place. Cached, because the panel is rebuilt
+   * every minute and forty of these is a few dozen milliseconds of geometry
+   * that gives the same answer each time.
+   */
+  private viewFrom(site: AlmanacSite, eclipse: Eclipse): LocalView {
+    const key = `${eclipse.kind}|${Math.round(eclipse.time / MS_PER_MINUTE)}|${site.lat.toFixed(2)},${site.lon.toFixed(2)}|${site.zone}`
+    const cached = this.circumstances.get(key)
+    if (cached) return cached
+    const place = site.name || 'here'
+    let view: LocalView
+    if (eclipse.kind === 'solar') {
+      const local = localSolarCircumstances(eclipse, site.lon, site.lat)
+      const percent = Math.round(local.obscuration * 100)
+      if (percent === 0) {
+        view = { visible: false, strong: false, text: `Not visible from ${place}`, jumpTo: eclipse.greatest }
+      } else {
+        const depth = local.obscuration >= 0.999 ? 'total' : `${percent}% covered`
+        view = {
+          visible: true,
+          strong: local.obscuration >= 0.5,
+          text: `From ${place}: ${depth} at ${formatEventTime(site.zone, local.peak)}`,
+          // Go to the place the reader is standing, at the moment that matters
+          // there, rather than to a point of greatest eclipse an ocean away.
+          jumpTo: { lon: site.lon, lat: site.lat, time: local.peak },
+        }
+      }
+    } else {
+      const local = localLunarCircumstances(eclipse, site.lon, site.lat)
+      const sublunar = moonState(eclipse.time)
+      const jumpTo = { lon: sublunar.sublunarLon, lat: sublunar.sublunarLat }
+      if (local.visible) {
+        view = {
+          visible: true,
+          strong: local.elevation > 10,
+          text: `From ${place}: Moon ${formatElevation(local.elevation)} up at ${formatEventTime(site.zone, eclipse.time)}`,
+          jumpTo,
+        }
+      } else if (local.partly) {
+        view = { visible: true, strong: false, text: `From ${place}: Moon rising or setting mid-eclipse`, jumpTo }
+      } else {
+        view = { visible: false, strong: false, text: `Not visible from ${place}: Moon below the horizon`, jumpTo }
+      }
+    }
+    // The cache is bounded by the list and the places a reader visits; a few
+    // hundred entries at most, and cleared when it grows past that.
+    if (this.circumstances.size > 600) this.circumstances.clear()
+    this.circumstances.set(key, view)
+    return view
   }
 
   private moonRows(site: AlmanacSite, time: number, moon: MoonState, phase: MoonPhase): Row[] {
@@ -322,6 +446,183 @@ export class Almanac {
       // of the supermoon business.
       { label: 'Apparent size', value: `${(moon.angularRadius * 120).toFixed(2)}′`, quiet: true },
     ]
+  }
+
+  /**
+   * The sky as a chart: the Sun's bearing along the bottom, its height up the
+   * side, and today's path drawn across it with the hours marked.
+   *
+   * This is the oldest diagram in the subject, the one on the back of every
+   * sundial, and it answers questions the map cannot: which window the sun
+   * comes in at breakfast, how low it stays at noon in December, whether the
+   * Moon will be up over the sea tonight. The solstice curves are the envelope
+   * the Sun never leaves, so today's arc is read against the year's extremes,
+   * and the Moon's path is dashed because it is a different body on a
+   * different schedule and must not be mistaken for a second Sun.
+   */
+  private drawSky(site: AlmanacSite, time: number, sun: SolarState, moon: MoonState): void {
+    const width = Math.max(1, this.sky.clientWidth)
+    const height = SKY_HEIGHT
+    this.sky.width = Math.round(width * this.dpr)
+    this.sky.height = Math.round(height * this.dpr)
+    const ctx = this.sky.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
+    ctx.clearRect(0, 0, width, height)
+
+    const x = (azimuth: number) => (azimuth / 360) * width
+    const y = (altitude: number) => height - ((altitude - SKY_FLOOR) / (90 - SKY_FLOOR)) * height
+
+    // Cached per day and place: three hundred solar positions and as many
+    // lunar ones is a few milliseconds, not worth repeating every minute.
+    const reading = readingIn(site.zone, time)
+    const key = `${reading.year}-${reading.month}-${reading.day}|${site.lat.toFixed(3)},${site.lon.toFixed(3)}|${site.zone}`
+    if (this.skyCache?.key !== key) {
+      const noon = dayEvents(site.lat, site.lon, time).solarNoon ?? time
+      const curves: SkyCurve[] = []
+      const trace = (anchor: number, body: 'sun' | 'moon') => {
+        const points: SkyPoint[] = []
+        for (let m = -12 * 60; m <= 12 * 60; m += 5) {
+          const t = anchor + m * MS_PER_MINUTE
+          const local =
+            body === 'sun'
+              ? localSolar(site.lat, site.lon, solarState(t))
+              : localMoon(site.lat, site.lon, moonState(t))
+          points.push({ time: t, azimuth: local.azimuth, altitude: local.elevation })
+        }
+        return points
+      }
+      curves.push({ name: 'june', points: trace(seasonInstant(reading.year, 90) + (noon - Date.UTC(reading.year, reading.month - 1, reading.day, 12)), 'sun') })
+      curves.push({ name: 'december', points: trace(seasonInstant(reading.year, 270) + (noon - Date.UTC(reading.year, reading.month - 1, reading.day, 12)), 'sun') })
+      curves.push({ name: 'moon', points: trace(noon, 'moon') })
+      curves.push({ name: 'today', points: trace(noon, 'sun') })
+      this.skyCache = { key, curves }
+    }
+
+    // Ground and sky. The twilight depths are bands, so the chart carries the
+    // same vocabulary as the map's legend.
+    ctx.fillStyle = INK[50]
+    ctx.fillRect(0, 0, width, height)
+    const bands: Array<[number, number, string]> = [
+      [0, -6, 'rgba(247, 173, 48, 0.10)'],
+      [-6, -12, 'rgba(120, 140, 190, 0.10)'],
+      [-12, -18, 'rgba(90, 100, 150, 0.08)'],
+    ]
+    for (const [top, bottom, colour] of bands) {
+      ctx.fillStyle = colour
+      ctx.fillRect(0, y(top), width, y(bottom) - y(top))
+    }
+
+    // Compass and height rules.
+    ctx.strokeStyle = INK[200]
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    for (const azimuth of [90, 180, 270]) {
+      ctx.moveTo(x(azimuth), 0)
+      ctx.lineTo(x(azimuth), height)
+    }
+    for (const altitude of [30, 60]) {
+      ctx.moveTo(0, y(altitude))
+      ctx.lineTo(width, y(altitude))
+    }
+    ctx.stroke()
+    // The horizon is the line that matters.
+    ctx.strokeStyle = INK[400]
+    ctx.beginPath()
+    ctx.moveTo(0, y(0))
+    ctx.lineTo(width, y(0))
+    ctx.stroke()
+
+    ctx.font = '500 8.5px "Inter", system-ui, sans-serif'
+    ctx.fillStyle = INK[400]
+    ctx.textBaseline = 'top'
+    ctx.textAlign = 'center'
+    for (const [azimuth, label] of [[90, 'E'], [180, 'S'], [270, 'W']] as const) {
+      ctx.fillText(label, x(azimuth), 3)
+    }
+    ctx.textAlign = 'left'
+    ctx.fillText('N', 3, 3)
+    ctx.textAlign = 'right'
+    ctx.fillText('N', width - 3, 3)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'bottom'
+    ctx.fillText('60°', 3, y(60) - 1)
+    ctx.fillText('30°', 3, y(30) - 1)
+
+    const stroke = (points: SkyPoint[]) => {
+      ctx.beginPath()
+      let drawing = false
+      for (let i = 0; i < points.length; i++) {
+        const point = points[i]!
+        const previous = points[i - 1]
+        // The bearing wraps at north; break the line rather than draw across.
+        if (previous && Math.abs(point.azimuth - previous.azimuth) > 180) drawing = false
+        if (drawing) ctx.lineTo(x(point.azimuth), y(point.altitude))
+        else ctx.moveTo(x(point.azimuth), y(point.altitude))
+        drawing = true
+      }
+      ctx.stroke()
+    }
+
+    for (const curve of this.skyCache.curves) {
+      ctx.save()
+      if (curve.name === 'today') {
+        ctx.strokeStyle = SUN[400]
+        ctx.lineWidth = 1.6
+      } else if (curve.name === 'moon') {
+        ctx.strokeStyle = INK[500]
+        ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
+      } else {
+        ctx.strokeStyle = INK[300]
+        ctx.lineWidth = 1
+      }
+      stroke(curve.points)
+      ctx.restore()
+    }
+
+    // Hour marks on today's path, labelled every third hour while the Sun is
+    // anywhere near the sky.
+    const today = this.skyCache.curves.find((c) => c.name === 'today')!
+    ctx.fillStyle = SUN[500]
+    ctx.font = '500 8px "Inter", system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'bottom'
+    for (const point of today.points) {
+      const local = readingIn(site.zone, point.time)
+      if (local.minute >= 5) continue
+      if (point.altitude < SKY_FLOOR) continue
+      const px = x(point.azimuth)
+      const py = y(point.altitude)
+      ctx.beginPath()
+      ctx.arc(px, py, local.hour % 3 === 0 ? 2 : 1.2, 0, Math.PI * 2)
+      ctx.fill()
+      if (local.hour % 3 === 0 && point.altitude > -12) {
+        ctx.fillStyle = INK[600]
+        ctx.fillText(String(local.hour), px, py - 4)
+        ctx.fillStyle = SUN[500]
+      }
+    }
+
+    // Where they are now.
+    const sunNow = localSolar(site.lat, site.lon, sun)
+    const moonNow = localMoon(site.lat, site.lon, moon)
+    if (moonNow.elevation > SKY_FLOOR) {
+      ctx.strokeStyle = INK[700]
+      ctx.lineWidth = 1.2
+      ctx.beginPath()
+      ctx.arc(x(moonNow.azimuth), y(moonNow.elevation), 3.5, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    if (sunNow.elevation > SKY_FLOOR) {
+      ctx.fillStyle = SUN[600]
+      ctx.beginPath()
+      ctx.arc(x(sunNow.azimuth), y(sunNow.elevation), 4.5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = INK[0]
+      ctx.lineWidth = 1
+      ctx.stroke()
+    }
   }
 
   /**
