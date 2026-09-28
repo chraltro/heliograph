@@ -688,6 +688,53 @@ test('nothing was logged to the console along the way', async () => {
  * on a tall narrow screen is a thin strip, and it gets gestures rather than a
  * hover, because a finger is a pointer and not a cursor.
  */
+/**
+ * The offline cache was written, tested against nothing, and shipped, and it
+ * never installed: the bundler rewrote the worker's URL into a data: URL that
+ * a browser refuses, and the failure was caught and thrown away. Everything else
+ * passed because nothing asked whether a worker existed. So this asks, and then
+ * takes the network away and asks whether the page still opens.
+ */
+test('the offline cache really installs, and the page opens with no network', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } })
+  const visitor = await context.newPage()
+  await visitor.goto('/?t=2026-06-21T12:00:00Z&play=off')
+
+  const worker = await visitor.evaluate(() =>
+    Promise.race([
+      navigator.serviceWorker.ready.then((r) => ({ script: r.active?.scriptURL ?? '', scope: r.scope })),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('no service worker became ready')), 30_000)),
+    ]),
+  )
+  expect(worker.script).toMatch(/\/sw\.js$/)
+
+  // The build itself is in the cache: the shell, the data, the terrain, the code.
+  const held = await visitor.evaluate(async () => {
+    const names = await caches.keys()
+    const urls: string[] = []
+    for (const name of names) for (const request of await (await caches.open(name)).keys()) urls.push(request.url)
+    return urls
+  })
+  expect(held.some((url) => url.endsWith('/index.html'))).toBe(true)
+  expect(held.some((url) => /\/assets\/world-.*\.bin$/.test(url))).toBe(true)
+  expect(held.some((url) => /\/assets\/terrain-.*\.webp$/.test(url))).toBe(true)
+  expect(held.some((url) => /\/assets\/index-.*\.js$/.test(url))).toBe(true)
+  // The stylesheet too: the precache list was once built before the bundler had
+  // emitted it, and the page came up offline as unstyled text.
+  expect(held.some((url) => /\/assets\/style-.*\.css$/.test(url))).toBe(true)
+
+  await context.setOffline(true)
+  await visitor.reload()
+  await visitor.waitForFunction(() => (window as unknown as { __ready?: boolean }).__ready === true, null, {
+    timeout: 200_000,
+  })
+  await expect(visitor.locator('[data-date]')).toHaveText('SUN 21 JUN 2026')
+  // Styled, not just running: the ground colour comes from the stylesheet.
+  expect(await visitor.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(6, 11, 16)')
+  await context.close()
+})
+
 test.describe('on a phone', () => {
   let phone: Page
 

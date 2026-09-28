@@ -26,6 +26,17 @@ declare const __BUILD__: string
 
 const CACHE = `heliograph-${__BUILD__}`
 
+/**
+ * How everything is looked up. Vary is ignored on purpose: a server that sends
+ * `Vary: Origin` makes the cache treat the copy the worker fetched for itself
+ * as a different resource from the one the page asks for, because the page's
+ * module script and stylesheet are CORS-mode requests that carry an Origin
+ * header and the worker's own fetch does not. The file is right there under
+ * exactly the right URL, and without this it is refused. The names are content
+ * hashed, so there is never more than one right answer for a URL.
+ */
+const MATCH = { ignoreVary: true } as const
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
@@ -69,7 +80,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         const cache = await caches.open(CACHE)
-        const cached = await cache.match('./index.html')
+        const cached = await cache.match('./index.html', MATCH)
         if (cached) {
           // Refresh in the background so the next launch is current.
           void fetch(request)
@@ -88,7 +99,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE)
-      const cached = await cache.match(request)
+      const cached = await cache.match(request, MATCH)
       if (cached) return cached
       const response = await fetch(request)
       // Hashed assets never change under their own name, so they are worth

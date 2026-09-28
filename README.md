@@ -267,6 +267,18 @@ they stay sharp at every zoom. The city lights are 7,342 real places from
 Natural Earth, sized by the logarithm of their population and dimmed as they
 grow so that zooming in does not brighten a continent.
 
+Everything the page needs is compiled in, so after one visit it opens with no
+network at all: a service worker precaches the shell, the data, the terrain, the
+code and the stylesheet under a name derived from the build's own file hashes.
+It serves from that cache first, and when a new deployment's worker takes over
+the page reloads once to meet it, unless the visitor has already started using
+the map, so a fix is on screen the first time somebody opens the site rather
+than the second. Two things about this are easy to get wrong and both were:
+the worker's URL must be a plain path, because the bundler rewrites
+`new URL('sw.js', import.meta.url)` into an inlined data URL that a browser
+refuses; and cache lookups must ignore `Vary`, or a server that sends
+`Vary: Origin` makes the worker's own copy of a file unfindable by the page.
+
 ## Credits
 
 Cartography from [Natural Earth](https://www.naturalearthdata.com), which is in
