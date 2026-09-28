@@ -627,6 +627,7 @@ export class Heliograph {
     const panel = this.q('[data-layers]')
     toggle.addEventListener('click', () => {
       const open = panel.hasAttribute('hidden')
+      if (open) this.makeRoomForPanel()
       panel.toggleAttribute('hidden', !open)
       toggle.setAttribute('aria-expanded', String(open))
     })
@@ -1017,8 +1018,13 @@ export class Heliograph {
       if (!this.sheetMedia.matches || this.sheetOpen) return
       const target = event.target as Element | null
       if (!target || target.closest('[data-sheet-toggle]')) return
-      const top = target.getBoundingClientRect().top
-      if (top > window.innerHeight - 4) this.setSheet(true)
+      // Where the control sits inside the sheet, which the sheet's own slide
+      // does not change: both rectangles move together, so the difference is
+      // the same mid-animation as at rest. Comparing against the window instead
+      // said "on screen" for as long as the sheet was still on its way down.
+      const within = target.getBoundingClientRect().top - sheet.getBoundingClientRect().top
+      const peek = sheet.offsetHeight - this.sheetClosedShift
+      if (within >= peek - 4) this.setSheet(true)
     })
 
     // iOS will otherwise cancel the pointer stream the moment it decides the
@@ -1039,7 +1045,25 @@ export class Heliograph {
     this.q<HTMLButtonElement>('[data-recenter]').addEventListener('click', () => this.recenter())
   }
 
+  /**
+   * On a phone the panels and the sheet want the same piece of screen, and the
+   * sheet is translucent, so opening both at once printed one over the other.
+   * Whichever was asked for last wins, the way a native sheet and a popover do.
+   */
+  private makeRoomForPanel(): void {
+    if (this.sheetMedia?.matches && this.sheetOpen) this.setSheet(false)
+  }
+
+  private closePanels(): void {
+    if (!this.almanac.hidden) this.setAlmanac(false)
+    this.q('[data-layers]').setAttribute('hidden', '')
+    this.q('[data-layers-toggle]').setAttribute('aria-expanded', 'false')
+    this.q('[data-search]').setAttribute('hidden', '')
+    this.q('[data-search-toggle]').setAttribute('aria-expanded', 'false')
+  }
+
   private setSheet(open: boolean): void {
+    if (open && this.sheetMedia?.matches) this.closePanels()
     this.sheetOpen = open
     this.q('[data-sheet-toggle]').setAttribute('aria-expanded', String(open))
     this.q('[data-sheet-toggle]').setAttribute('aria-label', open ? 'Show less detail' : 'Show more detail')
@@ -1945,6 +1969,7 @@ export class Heliograph {
     const toggle = this.q<HTMLButtonElement>('[data-search-toggle]')
     toggle.addEventListener('click', () => {
       const opening = panel.hasAttribute('hidden')
+      if (opening) this.makeRoomForPanel()
       panel.toggleAttribute('hidden', !opening)
       toggle.setAttribute('aria-expanded', String(opening))
       if (opening) field.focus()
@@ -2107,6 +2132,7 @@ export class Heliograph {
   }
 
   private setAlmanac(open: boolean): void {
+    if (open) this.makeRoomForPanel()
     this.almanac.setHidden(!open)
     this.q('[data-almanac-toggle]').setAttribute('aria-expanded', String(open))
     // Fill it now rather than on the next frame: a panel that opens empty and

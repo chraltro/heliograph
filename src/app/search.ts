@@ -29,12 +29,32 @@ interface Candidate extends SearchResult {
 
 const MAX_RESULTS = 8
 
+/**
+ * Letters that are their own letter rather than a base letter with a mark on
+ * it, so Unicode has no decomposition to strip: an NFD pass leaves the ø in
+ * Bodø exactly where it was, and "bodo" never matches. The gazetteer's names
+ * are plain ASCII, so these are folded to what an ASCII spelling uses.
+ */
+const TRANSLITERATIONS: Record<string, string> = {
+  ø: 'o',
+  æ: 'ae',
+  œ: 'oe',
+  ð: 'd',
+  þ: 'th',
+  ł: 'l',
+  đ: 'd',
+  ß: 'ss',
+  ı: 'i',
+  ħ: 'h',
+}
+
 /** Fold accents and case away, so "Malmo" finds "Malmö" and "SAO" finds "São". */
 function fold(text: string): string {
   return text
+    .toLowerCase()
+    .replace(/[øæœðþłđßıħ]/g, (letter) => TRANSLITERATIONS[letter] ?? letter)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
 }
 
 /**

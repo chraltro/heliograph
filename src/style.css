@@ -1289,7 +1289,16 @@ select:hover {
   -webkit-backdrop-filter: blur(16px) saturate(0.75);
   border-radius: 10px;
   overflow: hidden;
-  animation: panel-in var(--dur-move) var(--ease-out);
+  animation: search-in var(--dur-move) var(--ease-out);
+}
+
+/* The panel is centred with a transform, so its entrance has to carry that
+   transform too, or it starts half its width to one side and slides in. */
+@keyframes search-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
 }
 
 .search-field {
@@ -1910,6 +1919,40 @@ kbd {
   }
 }
 
+/* ------------------------------------------------- search on a phone */
+
+/*
+ * The stage is position: fixed on a phone, which makes it a stacking context of
+ * its own, so the search panel's z-index counts only against its siblings and
+ * the rail, a sibling of the stage, sat on top of it. The panel opened at the
+ * top of the screen underneath the rail's buttons, with the field half hidden
+ * behind the search icon and the results list nowhere to be seen. It sits
+ * below the rail now, like the almanac and the layers panel, and its list is
+ * only as tall as the room between it and the keyboard.
+ */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .search {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 58px);
+    left: max(var(--space-3), env(safe-area-inset-left));
+    right: max(var(--space-3), env(safe-area-inset-right));
+    width: auto;
+    transform: none;
+    z-index: 4;
+    animation-name: panel-in;
+  }
+
+  .search-results {
+    max-height: calc(100vh - env(safe-area-inset-top) - 58px - 64px - var(--space-3));
+    max-height: calc(100dvh - env(safe-area-inset-top) - 58px - 64px - var(--space-3));
+  }
+
+  /* Sixteen pixels or more, or iOS zooms the whole page in on focus. */
+  .search-field {
+    font-size: 16px;
+  }
+}
+
 /* ------------------------------------------------ a rail that fits a phone */
 
 /*
@@ -1978,15 +2021,15 @@ kbd {
   .rail [data-date-field] {
     width: 92px;
     flex: 0 0 92px;
-    font-size: 12px;
+    font-size: 11px;
     padding-left: 3px;
     padding-right: 3px;
   }
 
   .rail [data-time-field] {
-    width: 72px;
-    flex: 0 0 72px;
-    font-size: 12px;
+    width: 74px;
+    flex: 0 0 74px;
+    font-size: 11px;
     padding-left: 3px;
     padding-right: 3px;
   }

@@ -879,14 +879,31 @@ test.describe('on a phone', () => {
         expect(box.right, `${box.selector} ends on screen`).toBeLessThanOrEqual(width)
         expect(box.width, `${box.selector} is big enough to hit`).toBeGreaterThanOrEqual(32)
       }
-      // The fields say their whole value: nothing cut off by a fixed width.
-      const clipped = await phone.evaluate(() =>
-        ['[data-date-field]', '[data-time-field]'].filter((selector) => {
-          const e = document.querySelector<HTMLInputElement>(selector)!
-          return e.scrollWidth > e.clientWidth
-        }),
-      )
-      expect(clipped).toEqual([])
+      // The fields say their whole value: nothing cut off by a fixed width. An
+      // input's scrollWidth does not include the text inside its editable
+      // part, so the check measures the widest thing each could say, set in the
+      // field's own type, and asks whether the box is wide enough to hold it.
+      const room = await phone.evaluate(() => {
+        const measure = (selector: string, widest: string) => {
+          const field = document.querySelector<HTMLInputElement>(selector)!
+          const style = getComputedStyle(field)
+          const probe = document.createElement('span')
+          // The font shorthand reads back as an empty string from a computed
+          // style, which silently measures in the default face; so the pieces.
+          probe.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font-family:${style.fontFamily};font-size:${style.fontSize};font-weight:${style.fontWeight};letter-spacing:${style.letterSpacing};font-feature-settings:${style.fontFeatureSettings}`
+          probe.textContent = widest
+          document.body.append(probe)
+          const text = probe.getBoundingClientRect().width
+          probe.remove()
+          const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+          // Five pixels for the control's own inner edge: at twelve pixels the
+          // date had two to spare by this arithmetic and still lost its last
+          // digit, and at eleven it has nine.
+          return { selector, short: Math.ceil(text + padding + 5 - field.clientWidth) }
+        }
+        return [measure('[data-date-field]', '00/00/0000'), measure('[data-time-field]', '00:00 PM')]
+      })
+      for (const field of room) expect(field.short, `${field.selector} is wide enough for its text`).toBeLessThanOrEqual(0)
       await phone.setViewportSize({ width: 390, height: 844 })
       await phone.waitForTimeout(400)
     })
@@ -907,6 +924,60 @@ test.describe('on a phone', () => {
     await expect(phone.locator('[data-zone]')).toContainText('Tokyo')
     await expect(phone.locator('[data-time]')).toHaveText('22:34:00')
     await phone.selectOption('[data-basis]', 'Europe/Oslo')
+  })
+
+  /**
+   * Search opened underneath the rail on a phone: the stage is a stacking
+   * context of its own there, so the panel's z-index never got above the rail's
+   * buttons, and the field was half hidden behind the search icon with its
+   * results nowhere. The desktop test could not see it.
+   */
+  test('search opens where it can be seen and used', async () => {
+    await phone.locator('[data-search-toggle]').click()
+    const field = phone.locator('[data-search-field]')
+    await expect(field).toBeVisible()
+    await field.fill('trom')
+    await expect(phone.locator('.search-result').first()).toBeVisible({ timeout: 10_000 })
+    const covered = await phone.evaluate(() => {
+      const on = (selector: string) => {
+        const r = document.querySelector(selector)!.getBoundingClientRect()
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        return hit !== null && document.querySelector(selector)!.contains(hit)
+      }
+      const panel = document.querySelector('.search')!.getBoundingClientRect()
+      const rail = document.querySelector('[data-search-toggle]')!.getBoundingClientRect()
+      return {
+        fieldReachable: on('[data-search-field]'),
+        firstResultReachable: on('.search-result'),
+        belowTheRail: panel.top >= rail.bottom - 1,
+        insideTheScreen: panel.left >= 0 && panel.right <= innerWidth && panel.bottom <= innerHeight,
+      }
+    })
+    expect(covered).toEqual({ fieldReachable: true, firstResultReachable: true, belowTheRail: true, insideTheScreen: true })
+    await phone.keyboard.press('Escape')
+    await expect(field).toBeHidden()
+  })
+
+  test('the sheet and the panels take turns instead of printing over each other', async () => {
+    // Open sheet, then a panel: the sheet folds away.
+    await phone.locator('[data-sheet-toggle]').focus()
+    await phone.keyboard.press('Enter')
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'true')
+    await phone.locator('[data-almanac-toggle]').click()
+    await expect(phone.locator('.almanac')).toBeVisible()
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'false')
+
+    // Open panel, then the sheet: the panel closes.
+    await phone.locator('[data-sheet-toggle]').focus()
+    await phone.keyboard.press('Enter')
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'true')
+    await expect(phone.locator('.almanac')).toBeHidden()
+
+    // The layers panel does the same.
+    await phone.locator('[data-layers-toggle]').click()
+    await expect(phone.locator('[data-layers]')).toBeVisible()
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'false')
+    await phone.locator('[data-layers-toggle]').click()
   })
 
   /** A button is also pressed from a keyboard, and by a screen reader. */
