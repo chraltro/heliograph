@@ -65,7 +65,10 @@ and the polar circles are exactly where the sun stops rising and setting.
 
 **Set an instant.** Type a date and a time into the rail, drag either scrubber,
 or press the arrow keys. The clock selector decides whether that time means UTC
-or the wall clock in a particular zone.
+or the wall clock in a particular zone. On a phone the selector lives in the
+sheet: tap the zone's name under the clock. The rail there has exactly enough
+room for the search button, the date, the time and two buttons, and keeping the
+selector in it pushed the search button off the edge of the screen.
 
 **The scrubbers are made of the data.** The upper track is the sky colour at the
 pinned place across twenty four hours, so sunrise, the golden hour and the three
@@ -123,6 +126,9 @@ knows where 19°S 132°W is; and every row says what the pinned place will see
 of it, which is the question people actually ask: "From Copenhagen: 83% covered
 at 20:03", or "Not visible from here", with a filter to keep only the ones that
 are. Pick a row and the map goes to the moment that matters where you stand.
+
+The next one is always in the rail, on a screen wide enough to have room for it:
+"Annular solar · 131d 3h", and clicking it takes the map there.
 
 On the map, a solar eclipse is a line, not a spot. The shadow axis is walked
 through the hours around greatest eclipse and the path of totality drawn as a

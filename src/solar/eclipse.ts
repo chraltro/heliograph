@@ -410,6 +410,12 @@ export interface EclipseTrack {
   readonly greatest: { lon: number; lat: number } | null
   readonly type: SolarEclipse['type']
   readonly time: number
+  /**
+   * How much of the Sun's diameter is covered at greatest eclipse. Zero or less
+   * means the discs never touch: a new moon that passes close but misses, which
+   * has a point of nearest approach and nothing else.
+   */
+  readonly magnitude: number
 }
 
 /**
@@ -450,7 +456,7 @@ export function centralPath(nearTime: number, stepMinutes = 3): EclipseTrack {
       azimuth: sky.azimuth,
     })
   }
-  return { central, greatest: eclipse.greatest, type: eclipse.type, time: eclipse.time }
+  return { central, greatest: eclipse.greatest, type: eclipse.type, time: eclipse.time, magnitude: eclipse.magnitude }
 }
 
 export interface LocalSolarCircumstances {

@@ -574,6 +574,42 @@ test('the Moon glyph shows the right phase', async () => {
   expect(lit.bright).toBeGreaterThan(lit.dark)
 })
 
+test('a new moon that misses the Sun draws no eclipse marker', async () => {
+  // 11 September 2026: the Moon passes within two degrees of the Sun, which is
+  // close enough to run the shadow pass and not close enough to be an eclipse.
+  // The overlay must stay clear of the greatest-eclipse ring it would otherwise
+  // hang at the point of nearest approach.
+  await apply('?t=2026-09-11T03:27:00Z&play=off&tz=UTC&z=1&lon=0&lat=0&layers=')
+  const warm = await page.evaluate(() => {
+    const canvas = document.querySelector('.overlay') as HTMLCanvasElement
+    const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
+    let n = 0
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3]! > 120 && data[i]! > 210 && data[i + 1]! > 150 && data[i + 2]! < 130) n++
+    }
+    return n
+  })
+  // Only the subsolar marker itself is sun coloured on this map.
+  expect(warm).toBeLessThan(400)
+})
+
+test('the rail says when the next eclipse is, and goes to it', async () => {
+  await apply('?t=2026-09-28T12:00:00Z&play=off&tz=UTC&layers=')
+  const readout = page.locator('[data-next-eclipse]')
+  await expect(readout).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('[data-next-eclipse-text]')).toContainText('Annular solar')
+  await expect(page.locator('[data-next-eclipse-text]')).toContainText('131d')
+  await readout.click()
+  await expect(page.locator('[data-date]')).toHaveText('SAT 06 FEB 2027')
+  // One line, like its neighbours: a wrapped readout makes the rail uneven.
+  const heights = await page.evaluate(() =>
+    [...document.querySelectorAll('.rail-readout')]
+      .filter((e) => (e as HTMLElement).offsetParent !== null)
+      .map((e) => Math.round(e.getBoundingClientRect().height)),
+  )
+  expect(new Set(heights).size).toBe(1)
+})
+
 test('the almanac opens closed, and can always be closed again', async () => {
   // A panel that covers the map must not restore itself, and must be closable
   // from inside itself: remembering it was open left a returning visitor on a
@@ -814,6 +850,95 @@ test.describe('on a phone', () => {
 
     await phone.locator('[data-almanac-close]').click()
     await expect(phone.locator('.almanac')).toBeHidden()
+  })
+
+  /**
+   * Where the controls actually land, which nothing else here looked at. The
+   * rail's fixed field widths once pushed the search button 55 pixels off the
+   * left edge of a 390 pixel screen and left the clock picker three quarters
+   * hidden, and every other test passed because the elements existed.
+   */
+  for (const [width, height] of [
+    [360, 740],
+    [390, 844],
+    [430, 932],
+  ] as const) {
+    test(`every control in the rail is on screen at ${width} pixels`, async () => {
+      await phone.setViewportSize({ width, height })
+      await phone.waitForTimeout(600)
+      const boxes = await phone.evaluate(() =>
+        ['[data-search-toggle]', '[data-date-field]', '[data-time-field]', '[data-almanac-toggle]', '[data-layers-toggle]'].map(
+          (selector) => {
+            const r = document.querySelector(selector)!.getBoundingClientRect()
+            return { selector, left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) }
+          },
+        ),
+      )
+      for (const box of boxes) {
+        expect(box.left, `${box.selector} starts on screen`).toBeGreaterThanOrEqual(0)
+        expect(box.right, `${box.selector} ends on screen`).toBeLessThanOrEqual(width)
+        expect(box.width, `${box.selector} is big enough to hit`).toBeGreaterThanOrEqual(32)
+      }
+      // The fields say their whole value: nothing cut off by a fixed width.
+      const clipped = await phone.evaluate(() =>
+        ['[data-date-field]', '[data-time-field]'].filter((selector) => {
+          const e = document.querySelector<HTMLInputElement>(selector)!
+          return e.scrollWidth > e.clientWidth
+        }),
+      )
+      expect(clipped).toEqual([])
+      await phone.setViewportSize({ width: 390, height: 844 })
+      await phone.waitForTimeout(400)
+    })
+  }
+
+  test('the clock picker lives under the clock, and a tap on the zone name reaches it', async () => {
+    const found = await phone.evaluate(() => {
+      const zone = document.querySelector('.clock-zone')!.getBoundingClientRect()
+      const hit = document.elementFromPoint(zone.left + zone.width / 2, zone.top + zone.height / 2)
+      const select = document.querySelector('[data-basis]') as HTMLSelectElement
+      return { atPoint: hit === select, inSheet: select.closest('[data-console]') !== null, zoneClipped: (() => {
+        const e = document.querySelector('.clock-zone')!
+        return e.scrollWidth > e.clientWidth
+      })() }
+    })
+    expect(found).toEqual({ atPoint: true, inSheet: true, zoneClipped: false })
+    await phone.selectOption('[data-basis]', 'Asia/Tokyo')
+    await expect(phone.locator('[data-zone]')).toContainText('Tokyo')
+    await expect(phone.locator('[data-time]')).toHaveText('22:34:00')
+    await phone.selectOption('[data-basis]', 'Europe/Oslo')
+  })
+
+  /** A button is also pressed from a keyboard, and by a screen reader. */
+  test('the sheet handle works from the keyboard', async () => {
+    await phone.evaluate(() => document.body.classList.remove('sheet-open'))
+    await phone.focus('[data-sheet-toggle]')
+    await phone.keyboard.press('Enter')
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'true')
+    await expect(phone.locator('body')).toHaveClass(/sheet-open/)
+    await phone.keyboard.press('Enter')
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test('tabbing into a folded sheet unfolds it rather than losing focus off screen', async () => {
+    await phone.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    await phone.focus('[data-star]')
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'true')
+    await phone.locator('[data-sheet-toggle]').focus()
+    await phone.keyboard.press('Enter')
+    await expect(phone.locator('[data-sheet-toggle]')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test('the layers icon survives the panel being open', async () => {
+    // The icon is a background image, and the shorthand in the open state used
+    // to reset it, so the button went blank exactly while it was in use.
+    const icon = () =>
+      phone.evaluate(() => getComputedStyle(document.querySelector('[data-layers-toggle]')!).backgroundImage)
+    expect(await icon()).toContain('svg')
+    await phone.locator('[data-layers-toggle]').click()
+    await expect(phone.locator('[data-layers-toggle]')).toHaveAttribute('aria-expanded', 'true')
+    expect(await icon()).toContain('svg')
+    await phone.locator('[data-layers-toggle]').click()
   })
 
   test('the touch targets are big enough to hit', async () => {

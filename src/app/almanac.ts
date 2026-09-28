@@ -135,6 +135,9 @@ export class Almanac {
   constructor() {
     this.element = document.createElement('div')
     this.element.className = 'panel almanac'
+    this.element.id = 'almanac'
+    this.element.setAttribute('role', 'region')
+    this.element.setAttribute('aria-label', 'Almanac')
     this.element.innerHTML = /* html */ `
       <button type="button" class="panel-close" data-almanac-close aria-label="Close the almanac">
         <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l10 10M11 1L1 11"/></svg>
@@ -492,8 +495,13 @@ export class Almanac {
         }
         return points
       }
-      curves.push({ name: 'june', points: trace(seasonInstant(reading.year, 90) + (noon - Date.UTC(reading.year, reading.month - 1, reading.day, 12)), 'sun') })
-      curves.push({ name: 'december', points: trace(seasonInstant(reading.year, 270) + (noon - Date.UTC(reading.year, reading.month - 1, reading.day, 12)), 'sun') })
+      // The solstice paths are traced around local solar noon on the day of the
+      // solstice, found by carrying today's offset from twelve UTC across to
+      // the 21st. Anchoring on the solstice instant itself would centre the
+      // window on whatever hour it happens to fall, and cut the arc in two.
+      const noonOffset = noon - Date.UTC(reading.year, reading.month - 1, reading.day, 12)
+      curves.push({ name: 'june', points: trace(Date.UTC(reading.year, 5, 21, 12) + noonOffset, 'sun') })
+      curves.push({ name: 'december', points: trace(Date.UTC(reading.year, 11, 21, 12) + noonOffset, 'sun') })
       curves.push({ name: 'moon', points: trace(noon, 'moon') })
       curves.push({ name: 'today', points: trace(noon, 'sun') })
       this.skyCache = { key, curves }

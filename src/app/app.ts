@@ -30,7 +30,16 @@ import {
   type SolarState,
 } from '../solar/solar.ts'
 import { moonlight, moonPhase, moonState, type MoonPhase, type MoonState } from '../solar/moon.ts'
-import { centralPath, lunarShadowNow, shadowUniforms, type EclipseTrack } from '../solar/eclipse.ts'
+import {
+  centralPath,
+  describeEclipse,
+  lunarShadowNow,
+  nextEclipses,
+  shadowUniforms,
+  worthSeeing,
+  type Eclipse,
+  type EclipseTrack,
+} from '../solar/eclipse.ts'
 import { isValidZone, listZones, localZone, wallClockToUtc, zoneOffsetMinutes } from '../time/timezone.ts'
 import terrainUrl from '../assets/terrain.webp'
 import terrainSeasonUrl from '../assets/terrain-season.webp'
@@ -94,6 +103,11 @@ const TEMPLATE = /* html */ `
     <span class="numeric" data-season>—</span>
   </div>
 
+  <button type="button" class="rail-readout rail-readout-wide rail-readout-button" data-next-eclipse hidden title="Go to it">
+    <span class="micro">Next eclipse</span>
+    <span class="numeric" data-next-eclipse-text>—</span>
+  </button>
+
   <div class="rail-controls">
     <button type="button" class="button button-icon" data-search-toggle aria-label="Find a place" title="Find a place (press /)">
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -112,8 +126,8 @@ const TEMPLATE = /* html */ `
 </header>
 
 <main class="stage" data-stage>
-  <canvas class="map" data-map></canvas>
-  <canvas class="overlay" data-overlay></canvas>
+  <canvas class="map" data-map role="img" aria-label="A world map shaded by the sunlight falling on it. The place panel and the almanac give the same information as text."></canvas>
+  <canvas class="overlay" data-overlay aria-hidden="true"></canvas>
 
   <button type="button" class="fab" data-recenter aria-label="Reset the view to your place">
     <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -154,7 +168,9 @@ const TEMPLATE = /* html */ `
     <section class="clock">
       <p class="clock-date numeric" data-date>—</p>
       <p class="clock-time numeric" data-time>—</p>
-      <p class="clock-zone micro" data-zone>—</p>
+      <div class="clock-zone-wrap" data-zone-wrap>
+        <p class="clock-zone micro" data-zone><span data-zone-name>—</span><span class="zone-offset" data-zone-offset></span></p>
+      </div>
     </section>
     <p class="peek" data-peek>—</p>
 
@@ -228,6 +244,13 @@ const LEGEND = [
   { label: 'Astronomical twilight', hint: '−12° to −18°', elevation: -15 },
   { label: 'Night', hint: 'Below −18°', elevation: -22 },
 ]
+
+/** The Sun and Moon as the renderer wants them, in thousands of kilometres. */
+function shadowFrame(shadow: ReturnType<typeof shadowUniforms>): NonNullable<Frame['eclipse']> {
+  const thousand = (v: readonly [number, number, number]) =>
+    [v[0] / 1000, v[1] / 1000, v[2] / 1000] as const
+  return { sun: thousand(shadow.sun), moon: thousand(shadow.moon), gmst: shadow.siderealDegrees }
+}
 
 export class Heliograph {
   private readonly root: HTMLElement
@@ -907,7 +930,11 @@ export class Heliograph {
     this.sheetEl = sheet
 
     this.sheetMedia = window.matchMedia(SHEET_MEDIA)
-    this.sheetMedia.addEventListener('change', () => this.syncSheet())
+    this.sheetMedia.addEventListener('change', () => {
+      this.seatZonePicker()
+      this.syncSheet()
+    })
+    this.seatZonePicker()
     new ResizeObserver(() => this.syncSheet()).observe(sheet)
 
     // The whole sheet is the handle: a drag starting anywhere that is not a
@@ -976,6 +1003,24 @@ export class Heliograph {
     sheet.addEventListener('pointerup', settle)
     sheet.addEventListener('pointercancel', settle)
 
+    // A button is also operated from the keyboard and by assistive technology,
+    // which produce a click and no pointer stream at all; without this the
+    // grip looked like a control and did nothing. A click that came from a
+    // finger or a mouse carries a detail of one or more and has been handled
+    // above, so only the detail-less kind is acted on here.
+    this.q('[data-sheet-toggle]').addEventListener('click', (event) => {
+      if ((event as MouseEvent).detail === 0 && this.sheetMedia.matches) this.setSheet(!this.sheetOpen)
+    })
+    // Tabbing into something that is folded off the bottom of the screen would
+    // move focus somewhere nobody can see. Unfold the sheet to meet it.
+    sheet.addEventListener('focusin', (event) => {
+      if (!this.sheetMedia.matches || this.sheetOpen) return
+      const target = event.target as Element | null
+      if (!target || target.closest('[data-sheet-toggle]')) return
+      const top = target.getBoundingClientRect().top
+      if (top > window.innerHeight - 4) this.setSheet(true)
+    })
+
     // iOS will otherwise cancel the pointer stream the moment it decides the
     // finger is a scroll. While a drag is live, the touches belong to the sheet.
     sheet.addEventListener(
@@ -1000,6 +1045,28 @@ export class Heliograph {
     this.q('[data-sheet-toggle]').setAttribute('aria-label', open ? 'Show less detail' : 'Show more detail')
     document.body.classList.toggle('sheet-open', open)
     this.syncSheet()
+  }
+
+  /**
+   * Where the clock picker lives. On a desktop it is a control in the rail, next
+   * to the date it qualifies. On a phone the rail has room for the date, the
+   * time and three buttons and no more: with the picker in it, the search
+   * button and most of the picker itself landed off the left edge of a
+   * 390 pixel screen, unreachable. So there it moves into the sheet, laid
+   * invisibly over the line that already names the zone under the clock, and
+   * tapping that line opens the native picker. It is the same element, so its
+   * value, its options and its handlers come along.
+   */
+  private seatZonePicker(): void {
+    const select = this.q<HTMLSelectElement>('[data-basis]')
+    const wrap = this.q('[data-zone-wrap]')
+    if (this.sheetMedia.matches) {
+      if (select.parentElement !== wrap) wrap.append(select)
+    } else if (select.parentElement === wrap) {
+      // Back beside its label, which is what it sat behind before it left.
+      this.q('.rail-controls label[for="basis"]').after(select)
+    }
+    document.body.classList.toggle('zone-in-sheet', this.sheetMedia.matches)
   }
 
   /**
@@ -1520,7 +1587,7 @@ export class Heliograph {
             eclipsed: lunar?.inUmbra ?? false,
           }
         : null,
-      eclipsePath: this.track,
+      eclipsePath: this.track && this.track.magnitude > 0 ? this.track : null,
       lunarEclipse: lunar,
       localTime: this.layers.localTime ?? false,
       hover: this.hover,
@@ -1567,10 +1634,11 @@ export class Heliograph {
     this.q('[data-time]').textContent = formatClock(reading)
     this.syncTimeFields(reading)
     const summary = zoneSummary(this.basis, this.time)
-    this.q('[data-zone]').textContent =
-      this.basis === 'UTC'
-        ? 'Coordinated Universal Time'
-        : `${prettyZone(this.basis)} · ${summary.abbreviation} · ${summary.offset}`
+    // The offset is a second way of saying the abbreviation for most zones, so
+    // it sits in its own span and a phone, which has the room for one, drops it.
+    this.q('[data-zone-name]').textContent =
+      this.basis === 'UTC' ? 'Coordinated Universal Time' : `${prettyZone(this.basis)} · ${summary.abbreviation}`
+    this.q('[data-zone-offset]').textContent = this.basis === 'UTC' ? '' : ` · ${summary.offset}`
 
     this.q('[data-subsolar]').textContent =
       `${formatLatitude(sun.subsolarLat)}  ${formatLongitude(sun.subsolarLon)}`
@@ -1583,6 +1651,8 @@ export class Heliograph {
     const days = Math.floor(away / MS_PER_DAY)
     const hours = Math.floor((away - days * MS_PER_DAY) / MS_PER_HOUR)
     this.q('[data-season]').textContent = days > 0 ? `${days}d ${hours}h` : `${hours}h`
+
+    this.updateNextEclipse()
 
     // The readout follows the pointer, and falls back to the pinned place when
     // the pointer is off the map.
@@ -1750,9 +1820,11 @@ export class Heliograph {
     if (!this.track || Math.abs(this.time - this.track.time) > 4 * MS_PER_HOUR) {
       this.track = centralPath(this.time)
     }
-    const thousand = (v: readonly [number, number, number]) =>
-      [v[0] / 1000, v[1] / 1000, v[2] / 1000] as const
-    return { sun: thousand(shadow.sun), moon: thousand(shadow.moon), gmst: shadow.siderealDegrees }
+    // The gate above is two degrees of separation, which is generous on
+    // purpose and lets through the new moons that pass close and miss. Those
+    // have no shadow to speak of and must not get a greatest-eclipse marker.
+    if (this.track.magnitude <= 0) return shadowFrame(shadow)
+    return shadowFrame(shadow)
   }
 
   /**
@@ -1919,21 +1991,77 @@ export class Heliograph {
     this.almanac.onRefresh = () => this.draw()
 
     // Picking an eclipse takes the map to it, and to where it is deepest.
-    this.almanac.onJump = (time, place) => {
-      this.mode = 'paused'
-      this.syncTransport()
-      if (place) {
-        this.view = clampView(this.size, { centerLon: place.lon, centerLat: place.lat, zoom: Math.max(this.view.zoom, 2.5) })
-      }
-      // A place may carry its own moment: the deepest point of the eclipse as
-      // seen from there, which is what the reader wants to look at.
-      this.setTime(place?.time ?? time)
-      this.draw()
-    }
+    this.almanac.onJump = (time, place) => this.jumpToEclipse(time, place)
+    this.q('[data-next-eclipse]').addEventListener('click', () => {
+      const eclipse = this.nextEclipseTarget
+      if (!eclipse) return
+      // A solar eclipse goes to where the shadow is deepest; a lunar one to
+      // where the Moon is overhead, which is the middle of who can see it.
+      const moon = moonState(eclipse.time)
+      const place = eclipse.kind === 'solar' ? eclipse.greatest : { lon: moon.sublunarLon, lat: moon.sublunarLat }
+      this.jumpToEclipse(eclipse.time, place)
+    })
 
     const toggle = this.q<HTMLButtonElement>('[data-almanac-toggle]')
     toggle.setAttribute('aria-expanded', 'false')
     toggle.addEventListener('click', () => this.setAlmanac(this.almanac.hidden))
+  }
+
+  /**
+   * The next eclipse worth looking up for, kept in the rail so the feature is
+   * visible without opening anything.
+   *
+   * The search is a few tens of milliseconds, so it is done once, after the
+   * frame that needed it, and then kept until the clock passes that eclipse or
+   * walks back behind the moment the search began.
+   */
+  private nextEclipseCache: { eclipse: Eclipse | null; from: number } | null = null
+  private nextEclipsePending = false
+
+  private updateNextEclipse(): void {
+    const button = this.q<HTMLButtonElement>('[data-next-eclipse]')
+    const cache = this.nextEclipseCache
+    const valid = cache !== null && this.time >= cache.from && (cache.eclipse === null || this.time <= cache.eclipse.time)
+    if (!valid) {
+      if (!this.nextEclipsePending) {
+        this.nextEclipsePending = true
+        const asked = this.time
+        setTimeout(() => {
+          this.nextEclipsePending = false
+          this.nextEclipseCache = { eclipse: nextEclipses(asked, 1, 100, worthSeeing)[0] ?? null, from: asked }
+          this.markDirty()
+        }, 60)
+      }
+      // Until the answer arrives, say nothing rather than something stale.
+      if (!cache) return
+    }
+    const eclipse = (valid ? cache : this.nextEclipseCache)?.eclipse
+    if (!eclipse) {
+      button.hidden = true
+      return
+    }
+    const away = eclipse.time - this.time
+    const days = Math.floor(away / MS_PER_DAY)
+    const hours = Math.floor((away - days * MS_PER_DAY) / MS_PER_HOUR)
+    button.hidden = false
+    this.q('[data-next-eclipse-text]').textContent =
+      `${describeEclipse(eclipse)} · ${days > 0 ? `${days}d ${hours}h` : `${Math.max(0, hours)}h`}`
+    this.nextEclipseTarget = eclipse
+  }
+
+  private nextEclipseTarget: Eclipse | null = null
+
+  /** Take the map to an eclipse, and to where the shadow is deepest. */
+  private jumpToEclipse(time: number, place: { lon: number; lat: number; time?: number } | null): void {
+    this.mode = 'paused'
+    this.syncTransport()
+    if (place) {
+      this.view = clampView(this.size, { centerLon: place.lon, centerLat: place.lat, zoom: Math.max(this.view.zoom, 2.5) })
+    }
+    // A place may carry its own moment: the deepest point of the eclipse as
+    // seen from there, which is what the reader wants to look at.
+    this.setTime(place?.time ?? time)
+    this.draw()
   }
 
   /**

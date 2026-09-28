@@ -105,6 +105,9 @@ interface Pass {
   vao: WebGLVertexArrayObject | null
 }
 
+/** The world width, in CSS pixels, that the city halo sizes were tuned at. */
+const CITY_REFERENCE_WIDTH = 1200
+
 const BLOOM_DIVISOR = 4
 
 /** The zone offset raster, in geographic pixels. */
@@ -670,7 +673,9 @@ export class MapRenderer {
       u.f1('uIntensity', t.cityIntensity)
       u.f1('uSizeMin', t.citySizeMin * dpr)
       u.f1('uSizeMax', t.citySizeMax * dpr)
-      u.f1('uZoom', frame.view.zoom)
+      // One at the width a desktop shows the whole world, which is what the
+      // halo sizes were tuned against.
+      u.f1('uWorldScale', worldWidth(frame.size, frame.view) / CITY_REFERENCE_WIDTH)
       for (const offset of copies) {
         this.setView(u, frame, dpr, offset)
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.counts.city)

@@ -192,6 +192,19 @@ describe('the catalogue', () => {
       expect(dallas.radiusKm * 2).toBeLessThan(205)
     })
 
+    test('a new moon that passes close and misses is not an eclipse', () => {
+      // 19 March 2026 and 11 September 2026 both bring the Moon within two
+      // degrees of the Sun and neither is an eclipse: 2026 has exactly two
+      // solar eclipses, in February and August. The map's cheap gate lets them
+      // through, so the magnitude is what has to say no.
+      for (const iso of ['2026-03-19T01:23:00Z', '2026-09-11T03:27:00Z', '2028-06-22T18:00:00Z']) {
+        expect(centralPath(utc(iso)).magnitude).toBeLessThanOrEqual(0)
+      }
+      // And the real ones say yes, including a partial that never reaches the ground.
+      expect(centralPath(utc('2025-03-29T10:47:00Z')).magnitude).toBeGreaterThan(0.5)
+      expect(centralPath(utc('2026-08-12T17:46:00Z')).magnitude).toBeGreaterThan(1)
+    })
+
     test('gives a partial eclipse no track at all', () => {
       // 2025-03-29 is partial everywhere: the axis passes north of the Earth.
       const path = centralPath(utc('2025-03-29T10:47:00Z'))

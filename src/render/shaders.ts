@@ -582,7 +582,7 @@ in vec2 aCorner;      // -1..1 quad
 in vec3 aCity;        // lon, lat, magnitude
 uniform float uSizeMin;
 uniform float uSizeMax;
-uniform float uZoom;
+uniform float uWorldScale;
 
 out vec2 vUv;
 out float vMagnitude;
@@ -604,7 +604,12 @@ void main() {
   // Bigger places get bigger halos, and the halo grows with the map so the lit
   // field keeps the same shape as you zoom. Scaling it any slower pulls the
   // glows apart and turns a continent into a field of separate dots.
-  float scale = clamp(pow(uZoom, 0.8), 0.9, 3.5);
+  //
+  // The reference is how wide the world is on screen, not the zoom number: a
+  // phone opens at zoom three because its zoom one is a 390 pixel world, and
+  // scaling by the zoom gave it halos twice the size of a desktop showing the
+  // same world at the same width, which ran a continent into a single cloud.
+  float scale = clamp(pow(uWorldScale, 0.8), 0.6, 3.5);
   float size = mix(uSizeMin, uSizeMax, pow(aCity.z, 1.7)) * scale;
   // A city emits a fixed amount of light. Spreading it over a larger halo has to
   // dim it, or every zoom step makes the continents brighter than the last.

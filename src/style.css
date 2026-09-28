@@ -253,18 +253,21 @@ canvas {
     color var(--dur-tap) var(--ease-out);
 }
 
+/* background-color and not the shorthand: the phone's Layers button draws its
+   icon as a background image, and the shorthand resets that to nothing, so the
+   icon vanished exactly while the button was being pressed or was open. */
 .button:hover {
-  background: var(--ink-100);
+  background-color: var(--ink-100);
   color: var(--ink-800);
 }
 
 .button:active {
-  background: var(--ink-100);
+  background-color: var(--ink-100);
   color: var(--sun-500);
 }
 
 .button[aria-expanded='true'] {
-  background: var(--ink-100);
+  background-color: var(--ink-100);
   color: var(--ink-800);
 }
 
@@ -1853,4 +1856,173 @@ kbd {
   color: var(--ink-600);
   text-align: center;
   line-height: 1.3;
+}
+
+
+/* -------------------------------------------------------- next eclipse */
+
+/* A readout that is also a button: it should read as the others do until the
+   pointer says otherwise. The class sets display, which beats the hidden
+   attribute, so hidden has to be restated. */
+.rail-readout-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-readout-button[hidden] {
+  display: none;
+}
+
+.rail-readout-button .numeric {
+  transition: color var(--dur-tap) var(--ease-out);
+}
+
+.rail-readout-button:hover .numeric,
+.rail-readout-button:focus-visible .numeric {
+  color: var(--sun-500);
+}
+
+/* A readout is one line. Wrapping one to two made the rail's own height and
+   its neighbours' alignment depend on what a number happened to say. */
+.rail-readout .micro,
+.rail-readout .numeric {
+  white-space: nowrap;
+}
+
+/* Four readouts need more rail than three. The gaps tighten first, and the zone
+   picker, which ellipsises, gives up the rest; below 1400 the newest readout
+   steps aside instead, because a picker any narrower stops being readable. */
+@media (min-width: 861px) and (max-width: 1600px) {
+  .rail {
+    gap: var(--space-4);
+  }
+}
+
+@media (max-width: 1399px) {
+  .rail-readout-button {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------ a rail that fits a phone */
+
+/*
+ * The rail on a phone holds the search button, the date, the time and two
+ * buttons, and every one of them must be on screen. It used to hold the clock
+ * picker as well, and at 390 pixels the search button sat 55 pixels off the
+ * left edge and the picker was three quarters hidden. The picker now lives in
+ * the sheet, and the Almanac folds to an icon the way Layers already had.
+ */
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .clock-zone-wrap {
+    position: relative;
+    min-width: 0;
+  }
+
+  /* The picker, laid invisibly over the line that names the zone: a tap on the
+     words is a tap on the picker. */
+  .clock-zone-wrap select {
+    position: absolute;
+    inset: -6px -4px;
+    width: calc(100% + 8px);
+    max-width: none;
+    height: calc(100% + 12px);
+    min-width: 0;
+    padding: 0;
+    opacity: 0;
+    background: transparent;
+    cursor: pointer;
+    /* Sixteen pixels or more keeps iOS from zooming in on focus. */
+    font-size: 16px;
+  }
+
+  /* A small caret after the words says they can be tapped. */
+  .clock-zone::after {
+    content: '';
+    display: inline-block;
+    width: 0;
+    height: 0;
+    margin-left: 6px;
+    vertical-align: 1px;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid currentColor;
+    opacity: 0.7;
+  }
+
+  .clock-zone {
+    display: block;
+  }
+
+  [data-almanac-toggle] {
+    font-size: 0;
+    letter-spacing: 0;
+    width: 40px;
+    padding: 0;
+    min-height: 36px;
+    flex: 0 0 auto;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%23b4b8bc' stroke-width='1.4' stroke-linecap='round'%3E%3Cpath d='M1.5 12.5h13'/%3E%3Cpath d='M4.5 12.5a3.5 3.5 0 0 1 7 0'/%3E%3Cpath d='M8 4.2v1.8M3.2 6.6l1.3 1.2M12.8 6.6l-1.3 1.2'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px;
+  }
+
+  /* One fixed width each, sized for the type these fields use on a phone, with
+     just enough side padding to keep the text off the rounded ends. */
+  .rail [data-date-field] {
+    width: 92px;
+    flex: 0 0 92px;
+    font-size: 12px;
+    padding-left: 3px;
+    padding-right: 3px;
+  }
+
+  .rail [data-time-field] {
+    width: 72px;
+    flex: 0 0 72px;
+    font-size: 12px;
+    padding-left: 3px;
+    padding-right: 3px;
+  }
+
+  /* The offset says what the abbreviation beside it already does. */
+  .zone-offset {
+    display: none;
+  }
+
+  .rail-controls {
+    gap: var(--space-2);
+  }
+}
+
+/* -------------------------------------------- the very narrowest screens */
+
+/*
+ * At 320 pixels the rail's controls need about 420, and clipping the excess
+ * threw the search button and the zone picker off the left edge with no way to
+ * reach them. Rather than shrink a date field into illegibility, the rail
+ * scrolls sideways here: every control stays reachable, the row stays one
+ * fixed height, and the date and time, which are what people came for, are
+ * the part that opens on screen. Stated last for the usual reason: the phone
+ * shell's rules are above and equal specificity goes to the later one.
+ */
+@media (max-width: 350px) {
+  .rail-controls {
+    overflow-x: auto;
+    overflow-y: hidden;
+    justify-content: flex-start;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+  }
+
+  .rail-controls::-webkit-scrollbar {
+    display: none;
+  }
 }
